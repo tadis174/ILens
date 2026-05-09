@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "dotnet-project-licenses": {
+      "version": "3.0.0-alpha.9",
+      "commands": [
+        "dotnet-project-licenses"
+      ],
+      "rollForward": false
+    }
+  }
+}
