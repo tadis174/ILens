@@ -1,0 +1,17 @@
+# Files expected at Build/dist/ root after `dotnet publish -c Release`.
+# Source of truth shared between the csproj publish target's <Copy>
+# commands and Source/Attribution/check-staged.ps1.
+#
+# Adding a new file to Build/dist/ requires:
+#   1. Adding a <Copy> command in ILens.csproj's _ILensReleaseFlow target.
+#   2. Adding the resulting filename here, one per line.
+#   3. (If the file is third-party content) updating Source/Attribution/INDEX.md
+#      and vendoring the upstream LICENSE.
+#
+# Files inside Build/dist/third-party-licenses/ are NOT listed here; their
+# allowlist is derived from the License: and Notice: lines in INDEX.md.
+ILens.exe
+LICENSE
+README.md
+THIRD-PARTY-NOTICES.txt
+guide.html

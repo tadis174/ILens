@@ -1,0 +1,22 @@
+name: Close pull requests
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close with comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr close "$PR_URL" --comment "Thanks for your interest in ILens! This project doesn't accept pull requests.
+
+          If you've found a bug or have a feature request, please [open an issue](https://github.com/$REPO/issues/new) instead. See [CONTRIBUTING.md](https://github.com/$REPO/blob/main/CONTRIBUTING.md) for context."

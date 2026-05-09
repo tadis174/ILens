@@ -16,7 +16,9 @@ Download the latest release ZIP from the [Releases page](https://github.com/tadi
 
 **System requirements**: Windows 10/11, x64. No .NET runtime install required — the binary bundles its own.
 
-## Integration with Claude Code
+## Setup
+
+### Step 1: Register the server
 
 Add an entry to `.mcp.json` in your project root:
 
@@ -45,13 +47,41 @@ The `list_allowed_roots` tool surfaces the configured roots so the agent can dis
 
 > **Heads up**: Claude Code only registers MCP servers at session start. Editing `.mcp.json` inside a running session does not pick up the new server — start a new session.
 
+### Step 2: Tell Claude to use it
+
+Without this, Claude won't actually pick ILens — it'll keep reaching for `ildasm` via Bash, reading `.dll` files directly, or web-searching for source. Drop the following block into your project's `CLAUDE.md` and replace `<allow-root>` with the directory configured above:
+
+````markdown
+## Inspecting .NET assemblies
+
+Assemblies under `<allow-root>` are reachable through the `ilens` MCP server.
+Prefer ILens tools over running `ildasm` / `ilspycmd` via Bash, reading `.dll`
+files directly, or web-searching for source.
+
+- Discovery: `search_types` (substring match), `list_types` (whole namespace),
+  `find_methods` (signature search).
+- Reading: `summarize_type` (public surface, no bodies), `list_members`
+  (filtered surface), `decompile_type` (full C#), `decompile_method` (single
+  method body).
+- Cross-references: `analyze` with `kind` set to one of `UsedBy`,
+  `InstantiatedBy`, `ExposedBy`, `ExtensionMethods`, `AppliedTo`,
+  `OverriddenBy`, `ImplementedBy`, `Uses`, `Implements`, `ReadBy`,
+  `AssignedBy`. Valid kinds depend on the symbol category.
+````
+
+#### Per-line walkthrough
+
+- The first paragraph is the load-bearing prefer-MCP rule. Without it, models default to `Bash`.
+- The discovery bullet routes "I don't know the full name" tasks to the right tool: a partial name goes to `search_types`, a known namespace goes to `list_types`, a method shape goes to `find_methods`.
+- The reading bullet escalates from cheapest to most expensive: `summarize_type` first, `list_members` when only part of the surface is needed, `decompile_method` for one method body, `decompile_type` only when full source is required.
+- The `analyze` bullet enumerates the `kind` enum so the model picks values the schema accepts — using one that does not apply to the symbol category produces an error like `Analysis kind 'ReadBy' is not valid for Method`.
+
 ## Full reference
 
 A self-contained HTML user guide covers what this README does not:
 
 - **Per-tool reference** — every tool, every parameter (with `required` / `optional` flags and types), return shape, and full list of error conditions
-- **Claude Desktop integration** — different config path than Claude Code, no per-project `CLAUDE.md`
-- **Project-level `CLAUDE.md` snippet** — paste-ready text the consuming project drops into its own `CLAUDE.md` so Claude actively prefers ILens tools over `ildasm` / `Read` / web search
+- **Alternative integration paths** — `claude mcp add` CLI command, Claude Desktop config
 - **Security model** — what's enforced (`--allow-root` mandatory, no traversal, no network, 200 MB cap, read-only), and what's not
 - **Troubleshooting** — error string → likely cause mapping
 
@@ -62,7 +92,6 @@ Read it online at **https://tadis174.github.io/ILens/guide.html**, or open the b
 If you'd rather build the binary yourself:
 
 ```bash
-dotnet tool restore
 dotnet build -c Release
 dotnet publish -c Release
 ```

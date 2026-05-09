@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ILens guide</title>
+<title>ILens — User guide</title>
 <style>
 :root {
   --brand-green:        #008800;
@@ -18,339 +18,191 @@
   --rule:               rgba(0, 136, 0, 0.18);
   --header-band:        linear-gradient(90deg, rgba(0,136,0,0.08), rgba(204,0,204,0.05));
 }
-
 * { box-sizing: border-box; }
-
-html, body {
-  margin: 0;
-  padding: 0;
-  background: var(--bg);
-  color: var(--text);
+body {
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
   line-height: 1.6;
-}
-
-.page {
+  color: var(--text);
+  background: var(--bg);
   max-width: 760px;
   margin: 0 auto;
-  padding: 0 24px 80px;
+  padding: 0 1.5rem 4rem;
 }
-
-header.band {
-  background: var(--header-band);
-  border-bottom: 1px solid var(--rule);
-  padding: 28px 0;
-  margin-bottom: 32px;
-}
-
-header.band .inner {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 0 24px;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-}
-
-.logo {
-  width: 64px;
-  height: 64px;
-  flex-shrink: 0;
-}
-
-.logo svg {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-
-.title-block h1 {
-  margin: 0;
-  font-size: 1.9rem;
-  color: var(--brand-green);
-  letter-spacing: -0.01em;
-}
-
-.title-block .meta {
-  margin: 4px 0 0;
-  color: var(--text-muted);
-  font-size: 0.95rem;
-}
-
-.title-block .version {
-  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
-  color: var(--brand-magenta);
-}
-
-h2 {
-  color: var(--brand-green);
-  font-size: 1.4rem;
-  margin: 2.4em 0 0.6em;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid var(--rule);
-}
-
-h3 {
-  color: var(--brand-green);
-  font-size: 1.15rem;
-  margin: 1.6em 0 0.3em;
-}
-
-h4 {
-  font-size: 0.95rem;
-  margin: 1em 0 0.3em;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-p {
-  margin: 0.7em 0;
-}
-
-a {
-  color: var(--brand-green);
-  text-decoration: none;
-}
-
-a:hover {
-  color: var(--brand-green-bright);
-  text-decoration: underline;
-}
-
+h1, h2, h3, h4 { color: var(--brand-green); font-weight: 600; }
+h1 { margin: 0; font-size: 2rem; line-height: 1.1; }
+h2 { border-bottom: 1px solid var(--rule); padding-bottom: 0.3rem; margin-top: 2.5rem; font-size: 1.5rem; }
+h3 { margin-top: 1.8rem; font-size: 1.2rem; }
+h4 { margin-top: 1.2rem; font-size: 1rem; }
+p { margin: 0.6rem 0; }
+a { color: var(--brand-green); text-decoration: none; }
+a:hover { color: var(--brand-green-bright); text-decoration: underline; }
 code {
   font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
   background: var(--code-bg);
   color: var(--brand-magenta);
-  padding: 0.1em 0.35em;
+  padding: 0.1rem 0.3rem;
   border-radius: 3px;
-  font-size: 0.9em;
+  font-size: 0.92em;
 }
-
 pre {
   background: var(--code-bg);
-  padding: 14px 16px;
-  border-radius: 4px;
+  padding: 1rem;
   overflow-x: auto;
-  font-size: 0.88rem;
+  border-radius: 4px;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-size: 0.9em;
   line-height: 1.5;
 }
-
-pre code {
-  background: none;
-  color: inherit;
-  padding: 0;
-  font-size: inherit;
+pre code { background: none; color: inherit; padding: 0; font-size: 1em; }
+.header-band {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: var(--header-band);
+  padding: 1.25rem 1.5rem;
+  margin: 0 -1.5rem 2rem;
 }
-
-ul, ol {
-  padding-left: 1.4em;
-}
-
-li {
-  margin: 0.3em 0;
-}
-
-dl {
-  margin: 0.6em 0 1em;
-}
-
-dt {
-  margin-top: 0.6em;
-  font-weight: 600;
-}
-
-dd {
-  margin: 0.2em 0 0 1.2em;
-  color: var(--text);
-}
-
-dd .desc {
-  display: block;
-  color: var(--text-muted);
-  font-size: 0.95em;
-  margin-top: 0.15em;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 1em 0;
-  font-size: 0.93rem;
-}
-
-th, td {
-  text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--rule);
-  vertical-align: top;
-}
-
-th {
-  color: var(--brand-green);
-  font-weight: 600;
+.header-band .logo { width: 64px; height: 64px; flex: none; }
+.header-band .title { display: flex; flex-direction: column; }
+.header-band .meta { color: var(--text-muted); font-size: 0.95rem; margin-top: 0.25rem; }
+.header-band .meta .sep { margin: 0 0.4rem; opacity: 0.5; }
+nav.toc {
   background: var(--bg-soft);
+  padding: 0.75rem 1.25rem;
+  border-radius: 4px;
+  border: 1px solid var(--rule);
+  margin-bottom: 1.5rem;
 }
-
-td.num {
-  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
-  text-align: right;
-  white-space: nowrap;
-}
-
+nav.toc ol { margin: 0.25rem 0; padding-left: 1.5rem; }
+nav.toc li { margin: 0.15rem 0; }
+nav.toc strong { color: var(--text); }
 .callout {
   background: var(--bg-soft);
-  border-left: 3px solid var(--brand-magenta-soft);
-  padding: 12px 16px;
-  margin: 1em 0;
-  border-radius: 0 3px 3px 0;
-  font-size: 0.95rem;
+  border-left: 3px solid var(--brand-magenta);
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  border-radius: 0 4px 4px 0;
 }
-
-.callout strong {
-  color: var(--brand-magenta);
-}
-
+.muted { color: var(--text-muted); font-size: 0.92em; }
 .badge {
   display: inline-block;
-  font-size: 0.72rem;
-  padding: 2px 8px;
+  padding: 0.1rem 0.55rem;
   border-radius: 999px;
+  font-size: 0.7em;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  vertical-align: middle;
-  margin-left: 0.4em;
+  vertical-align: 0.18em;
+  letter-spacing: 0.03em;
+  text-transform: lowercase;
 }
-
-.badge.read-only {
-  background: var(--brand-green);
-  color: #fff;
+.badge-readonly { background: var(--brand-green); color: white; }
+.badge-required { background: var(--brand-magenta); color: white; }
+.badge-optional { background: #d4d4d8; color: #1a1a1a; }
+dl.params { margin: 0.5rem 0 0.5rem 0; }
+dl.params dt {
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  margin-top: 0.7rem;
+  font-size: 0.95em;
 }
-
-.badge.required {
-  background: var(--brand-magenta);
-  color: #fff;
-}
-
-.badge.optional {
-  background: #d8d8dc;
-  color: #333;
-}
-
-.toc {
-  background: var(--bg-soft);
-  border: 1px solid var(--rule);
-  border-radius: 4px;
-  padding: 14px 22px;
-  margin: 1.5em 0;
-}
-
-.toc ol {
-  margin: 0;
-  padding-left: 1.4em;
-}
-
-.toc li {
-  margin: 0.25em 0;
-}
-
-.tool-section {
-  margin-bottom: 2em;
-}
-
-.tool-section h3 code {
-  font-size: 1em;
-}
-
-.muted {
-  color: var(--text-muted);
-}
-
-.illustrative {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  margin-top: -0.3em;
-}
+dl.params dt .pname { color: var(--brand-magenta); }
+dl.params dt .ptype { color: var(--text-muted); font-size: 0.92em; margin-left: 0.4rem; }
+dl.params dd { margin: 0.15rem 0 0 1.5rem; color: var(--text); }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.95em; }
+th, td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; }
+th { background: var(--bg-soft); font-weight: 600; color: var(--text); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+ul, ol { padding-left: 1.5rem; }
+li { margin: 0.2rem 0; }
+.tool-meta { font-weight: 600; margin-top: 0.8rem; }
+.see-also { color: var(--text-muted); font-size: 0.92em; margin-top: 0.8rem; }
 </style>
 </head>
 <body>
 
-<header class="band">
-  <div class="inner">
-    <div class="logo">
-      <svg xmlns="http://www.w3.org/2000/svg" version="1.2" baseProfile="tiny" viewBox="0 0 48 48">
-        <polygon points="24,8 40,24 24,40 8,24" fill="#080" stroke="#0c0" stroke-width="1" stroke-linejoin="round"/>
-        <polygon points="8,8 40,8 24,24" fill="#c0c" stroke="#e8e" stroke-width="1" stroke-linejoin="round"/>
-      </svg>
-    </div>
-    <div class="title-block">
-      <h1>ILens</h1>
-      <p class="meta">MCP server for inspecting .NET assemblies &middot; version <span class="version">1</span></p>
-    </div>
+<header class="header-band">
+<svg class="logo" xmlns="http://www.w3.org/2000/svg" version="1.2" baseProfile="tiny" viewBox="0 0 48 48" aria-hidden="true">
+  <polygon points="24,8 40,24 24,40 8,24" fill="#080" stroke="#0c0" stroke-width="1" stroke-linejoin="round"/>
+  <polygon points="8,8 40,8 24,24" fill="#c0c" stroke="#e8e" stroke-width="1" stroke-linejoin="round"/>
+</svg>
+<div class="title">
+  <h1>ILens</h1>
+  <div class="meta">
+    Version 2<span class="sep">·</span>MCP server for inspecting .NET assemblies
   </div>
+</div>
 </header>
 
-<div class="page">
-
-<h2 id="contents">Contents</h2>
 <nav class="toc">
-  <ol>
-    <li><a href="#why">Why ILens</a></li>
-    <li><a href="#overview">Overview</a></li>
-    <li><a href="#installation">Installation</a></li>
-    <li><a href="#claude-code">Integrating with Claude Code</a></li>
-    <li><a href="#claude-desktop">Integrating with Claude Desktop</a></li>
-    <li><a href="#project-guidance">Project-level guidance</a></li>
-    <li><a href="#security">Security model</a></li>
-    <li><a href="#tools">Tool reference</a></li>
-    <li><a href="#troubleshooting">Troubleshooting</a></li>
-    <li><a href="#about">Version, source, license</a></li>
-  </ol>
+<strong>Contents</strong>
+<ol>
+  <li><a href="#why">Why ILens</a></li>
+  <li><a href="#overview">Overview</a></li>
+  <li><a href="#installation">Installation</a></li>
+  <li><a href="#integration">Integrating with Claude Code</a></li>
+  <li><a href="#project-guidance">Project-level guidance</a></li>
+  <li><a href="#security">Security model</a></li>
+  <li><a href="#tools">Tool reference</a>
+    <ul>
+      <li><a href="#tools-discovery">Discovery</a></li>
+      <li><a href="#tools-inspection">Inspection</a></li>
+      <li><a href="#tools-decompilation">Decompilation</a></li>
+    </ul>
+  </li>
+  <li><a href="#troubleshooting">Troubleshooting</a></li>
+  <li><a href="#appendix-cli">Appendix A: <code>claude mcp add</code> CLI</a></li>
+  <li><a href="#appendix-desktop">Appendix B: Claude Desktop</a></li>
+  <li><a href="#colophon">Version, source, license</a></li>
+</ol>
 </nav>
 
 <h2 id="why">Why ILens</h2>
 
-<p>An AI agent inspecting a <code>.dll</code> typically falls back to <code>ildasm</code> (IL dump) or <code>ilspycmd</code> (full C# decompile) shelled out via <code>Bash</code>. Each invocation dumps an entire file as text, and that output stays in the agent's context as input tokens on every subsequent turn &mdash; quickly thousands of tokens spent inspecting a single class.</p>
+<p>An AI agent that needs to look inside a compiled <code>.dll</code> typically falls back to <code>ildasm</code> (IL dump) or <code>ilspycmd</code> (full C# decompile), shelled out via <code>Bash</code>. Both tools dump an entire file as text. That text becomes part of the agent's context and is paid for again as input tokens on every subsequent turn — so a single careless lookup quickly accumulates thousands of tokens spent inspecting one class.</p>
 
-<p>For a reference assembly of roughly 2 MB containing about 500 public types, the per-task cost looks like this:</p>
+<p>Order-of-magnitude cost for the same questions, against a reference assembly of roughly 2 MB and ~500 public types. Numbers are <strong>illustrative, not measured</strong>; the point is the shape, not the precision.</p>
 
 <table>
   <thead>
-    <tr><th>Task</th><th class="num"><code>ildasm</code></th><th class="num"><code>ilspycmd</code></th><th>ILens</th><th class="num">ILens tokens</th></tr>
+    <tr><th>Task</th><th>ildasm / ilspycmd</th><th>ILens equivalent</th><th>ILens cost</th></tr>
   </thead>
   <tbody>
-    <tr><td>List every public type</td><td class="num">~150,000</td><td class="num">~120,000</td><td><code>list_types</code></td><td class="num">~500</td></tr>
-    <tr><td>API surface of one mid-sized class</td><td class="num">~150,000</td><td class="num">~120,000</td><td><code>summarize_type</code></td><td class="num">~300</td></tr>
-    <tr><td>Find which type exposes a method</td><td class="num">~150,000</td><td class="num">~120,000</td><td><code>search_types</code></td><td class="num">~200</td></tr>
+    <tr>
+      <td>List every public type</td>
+      <td class="num">~10<sup>5</sup> tokens</td>
+      <td><code>list_types</code> per namespace</td>
+      <td class="num">~10<sup>2</sup></td>
+    </tr>
+    <tr>
+      <td>API surface of one mid-sized class</td>
+      <td class="num">~10<sup>5</sup></td>
+      <td><code>summarize_type</code></td>
+      <td class="num">10<sup>2</sup>–10<sup>3</sup></td>
+    </tr>
+    <tr>
+      <td>Find which type exposes a method</td>
+      <td class="num">~10<sup>5</sup></td>
+      <td><code>search_types</code> or <code>find_methods</code></td>
+      <td class="num">10<sup>2</sup>–10<sup>3</sup></td>
+    </tr>
   </tbody>
 </table>
-<p class="illustrative">Figures are illustrative, not measured.</p>
 
-<p>ILens turns assembly inspection into bounded, targeted lookups instead of full-file dumps &mdash; which is what makes it cheap enough to leave registered as an always-available tool.</p>
+<p>ILens turns assembly inspection into bounded, targeted lookups instead of full-file dumps — which is what makes it cheap enough to leave registered as an always-available tool.</p>
 
 <h2 id="overview">Overview</h2>
 
-<p>ILens is an MCP server that speaks stdio and exposes nine tools across three categories: discovery (locating types and methods), inspection (reading API surface and cross-references), and decompilation (full C# source for a type or method). Trust posture: read-only, scoped to <code>--allow-root</code> directories, no network access, single self-contained binary.</p>
+<p>ILens is an MCP server that speaks JSON-RPC over stdio and exposes nine tools across three categories: <em>discovery</em> (find types and methods by name or signature), <em>inspection</em> (summarize an API surface, list members, run cross-reference analysis), and <em>decompilation</em> (read the C# source of a type or a single method). Trust posture: every tool is read-only, every assembly path is validated against an explicit <code>--allow-root</code> allow-list, no shell-out, no network. Single self-contained binary, no .NET runtime install required.</p>
 
 <h2 id="installation">Installation</h2>
 
-<p>Extract the release ZIP anywhere on disk. The archive contains:</p>
-<ul>
-  <li><code>ILens.exe</code> &mdash; the self-contained server binary (~70 MB)</li>
-  <li><code>LICENSE</code>, <code>README.md</code>, <code>guide.html</code> (this file)</li>
-  <li><code>third-party-licenses/</code> &mdash; license texts for bundled dependencies plus a <code>manifest.json</code></li>
-</ul>
+<p>Extract the release ZIP anywhere. The binary is <code>ILens.exe</code>; no .NET runtime install is required (the binary is self-contained). Windows x64 only — that is the runtime identifier the publish target ships.</p>
 
-<p>No .NET runtime install is required &mdash; the binary bundles its own. Windows x64 only; the publish RID is <code>win-x64</code>.</p>
+<p>The bundled distribution also contains <code>LICENSE</code> (ILens is MIT), <code>THIRD-PARTY-NOTICES.txt</code> (top-level entry into the third-party-attribution archive), <code>README.md</code>, this <code>guide.html</code>, and a <code>third-party-licenses/</code> directory with per-source LICENSE files and an <code>INDEX.md</code> mapping each NuGet package and runtime component to its upstream source.</p>
 
-<h2 id="claude-code">Integrating with Claude Code</h2>
+<h2 id="integration">Integrating with Claude Code</h2>
 
-<p>Two equivalent ways to register the server. Pick one.</p>
+<p>Drop a <code>.mcp.json</code> file in your project root:</p>
 
-<h4>The <code>claude mcp add</code> CLI command</h4>
-<pre><code>claude mcp add ilens "C:\path\to\ILens.exe" --allow-root "C:\path\to\dlls"</code></pre>
-
-<h4>A <code>.mcp.json</code> snippet in the project root</h4>
 <pre><code>{
   "mcpServers": {
     "ilens": {
@@ -363,33 +215,16 @@ td.num {
 }</code></pre>
 
 <div class="callout">
-<strong>Heads up.</strong> Claude Code only registers MCP servers at session start. Editing <code>.mcp.json</code> inside a running session will not register the new server in that session. Start a new session (menu: "New session"). Restarting just the IDE or CLI window is not sufficient &mdash; the same conversation persists across the restart.
+<strong>Heads up:</strong> Claude Code only registers MCP servers at session start. Editing <code>.mcp.json</code> inside a running session will not register the new server in that session — start a new session (menu: "New session"). Restarting the IDE or CLI window alone is not sufficient; the same conversation persists across the restart.
 </div>
 
-<p>Each <code>--allow-root</code> flag adds a directory tree from which assemblies may be loaded. Multiple flags are accepted. Without any roots, the server cannot load any assemblies.</p>
+<p>Each <code>--allow-root</code> flag adds a directory tree from which assemblies may be loaded. <strong>Without any <code>--allow-root</code> flags, the server cannot load any assemblies.</strong> Tool calls supply the assembly path per request; the server validates that the path is inside one of the configured roots, rejects path traversal (<code>..</code>), and refuses files larger than 200 MB.</p>
 
-<h2 id="claude-desktop">Integrating with Claude Desktop</h2>
-
-<p>Claude Desktop reads its MCP configuration from <code>%APPDATA%\Claude\claude_desktop_config.json</code>. Add a <code>mcpServers</code> entry equivalent to the Claude Code one:</p>
-
-<pre><code>{
-  "mcpServers": {
-    "ilens": {
-      "command": "C:\\path\\to\\ILens.exe",
-      "args": [
-        "--allow-root", "C:\\path\\to\\dlls"
-      ]
-    }
-  }
-}</code></pre>
-
-<p>Restart Claude Desktop after editing this file for the new server to register.</p>
+<p class="muted">For the equivalent <code>claude mcp add</code> CLI command see <a href="#appendix-cli">Appendix A</a>; for Claude Desktop see <a href="#appendix-desktop">Appendix B</a>.</p>
 
 <h2 id="project-guidance">Project-level guidance</h2>
 
-<p>Registering ILens makes the tools <em>available</em>. In practice, models will still reach for <code>ildasm</code> via <code>Bash</code>, read raw <code>.dll</code> files, or web-search for source unless the consuming project nudges them toward ILens. A short snippet in the project's <code>CLAUDE.md</code> is what closes that gap.</p>
-
-<p>Drop the following block into your project's <code>CLAUDE.md</code> and replace <code>&lt;allow-root&gt;</code> with the directory configured in <code>.mcp.json</code>:</p>
+<p>Registering the server makes the tools <em>available</em>, not <em>preferred</em>. Without a hint in the consuming project's <code>CLAUDE.md</code>, Claude will keep reaching for <code>ildasm</code> via <code>Bash</code>, reading <code>.dll</code> files directly, or web-searching for source — exactly the expensive paths ILens replaces. Drop the block below into your project's <code>CLAUDE.md</code> and replace <code>&lt;allow-root&gt;</code> with the directory configured above:</p>
 
 <pre><code>## Inspecting .NET assemblies
 
@@ -407,330 +242,385 @@ files directly, or web-searching for source.
   `OverriddenBy`, `ImplementedBy`, `Uses`, `Implements`, `ReadBy`,
   `AssignedBy`. Valid kinds depend on the symbol category.</code></pre>
 
-<h4>What each line is doing</h4>
-<ul>
-  <li>The first paragraph is the load-bearing prefer-MCP rule. Without it, models default to <code>Bash</code>.</li>
-  <li>The discovery bullet routes "I don't know the full name" tasks to the right tool: a partial name goes to <code>search_types</code>, a known namespace goes to <code>list_types</code>, a method shape goes to <code>find_methods</code>.</li>
-  <li>The reading bullet escalates from cheapest to most expensive: <code>summarize_type</code> first, <code>list_members</code> when only part of the surface is needed, <code>decompile_method</code> for one method body, <code>decompile_type</code> only when full source is required.</li>
-  <li>The <code>analyze</code> bullet enumerates the <code>kind</code> enum so the model picks values the schema accepts &mdash; using one that does not apply to the symbol category produces an error like <code>Analysis kind 'ReadBy' is not valid for Method</code>.</li>
-</ul>
+<h4>Per-line walkthrough</h4>
 
-<div class="callout">
-<strong>Claude Desktop has no per-project <code>CLAUDE.md</code>.</strong> The equivalent guidance goes into the Project's instructions or the first message of a conversation.
-</div>
+<ul>
+  <li>The opening paragraph is the load-bearing <em>prefer-MCP</em> rule. Without it, models default to <code>Bash</code>.</li>
+  <li>The Discovery bullet routes "I don't know the full name" tasks to the right tool: a partial name goes to <code>search_types</code>, a known namespace to <code>list_types</code>, a method shape to <code>find_methods</code>.</li>
+  <li>The Reading bullet escalates from cheapest to most expensive: <code>summarize_type</code> first, <code>list_members</code> when only part of the surface is needed, <code>decompile_method</code> for one method body, <code>decompile_type</code> only when full source is required.</li>
+  <li>The <code>analyze</code> bullet enumerates the <code>kind</code> enum so the model picks values the schema accepts. Using one that does not apply to the symbol category produces an error like <code>Analysis kind 'ReadBy' is not valid for Method</code>.</li>
+</ul>
 
 <h2 id="security">Security model</h2>
 
 <ul>
-  <li><code>--allow-root</code> flags are mandatory at startup; with no roots, every load attempt is rejected with "No allowed roots configured."</li>
-  <li>Every request validates that the requested assembly path resolves to a file inside one of the configured roots; paths outside are rejected with "Path is not under any allowed root."</li>
-  <li>Path-traversal segments (<code>..</code>) are rejected before normalization as defense in depth.</li>
-  <li>Files larger than 200 MB are refused with "Assembly exceeds 200 MB size cap."</li>
-  <li>All MCP tools are read-only &mdash; no writes to assemblies, no shell-out, no network calls.</li>
-  <li>The server speaks stdio only; it does not open a network port.</li>
+  <li><code>--allow-root</code> flags are mandatory; with no roots configured, the server refuses every load with a clear "no allowed roots" message.</li>
+  <li>Every request validates that the requested assembly path is inside one of the configured roots (after path normalization, with separator-bounded prefix matching).</li>
+  <li>Path-traversal segments (<code>..</code>) are rejected before normalization (defense in depth, even though normalization would resolve them).</li>
+  <li>Files larger than 200 MB are refused with the actual size in the error message.</li>
+  <li>All MCP tools are read-only — no writes to assemblies, no shell-out, no network calls.</li>
+  <li>The server speaks stdio only; it does not open a network port. Logging goes to stderr, leaving stdout clean for the JSON-RPC transport.</li>
 </ul>
 
 <h2 id="tools">Tool reference</h2>
 
-<p>Nine tools, grouped by purpose. Every tool is read-only; every tool that takes an <code>assembly</code> parameter validates it against the configured allow-roots.</p>
+<p>Every parameter named <code>assembly</code> is a path that must resolve to a file inside one of the configured <code>--allow-root</code> directories. The same path-validation errors (empty path, traversal, outside-root, missing file, size cap) can surface from any tool that takes an <code>assembly</code> parameter; they are listed once under <a href="#troubleshooting">Troubleshooting</a> rather than repeated per tool.</p>
 
-<h3 id="cat-discovery">Discovery</h3>
+<h3 id="tools-discovery">Discovery</h3>
 
-<div class="tool-section">
-<h3 id="t-find-methods"><code>find_methods</code> <span class="badge read-only">read-only</span></h3>
-<p>Search the assembly for methods matching any combination of name, return type, parameter shape, declaring location, and accessibility. Type patterns match by short name or full name; generics are erased at the top level (<code>List</code> matches <code>List&lt;T&gt;</code>); <code>Nullable&lt;T&gt;</code> is unwrapped (<code>int</code> matches <code>int?</code>); arrays use a <code>[]</code> suffix.</p>
-<h4>Parameters</h4>
-<dl>
-  <dt><code>assembly</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Path to the .NET assembly to inspect (must be under an allowed root).</span></dd>
-  <dt><code>namePattern</code> <span class="badge optional">optional</span> <code>string</code></dt>
-  <dd><span class="desc">Case-insensitive substring filter on the method name.</span></dd>
-  <dt><code>returns</code> <span class="badge optional">optional</span> <code>string</code></dt>
-  <dd><span class="desc">Return-type pattern (e.g. <code>bool</code>, <code>IEnumerable</code>, a fully qualified name).</span></dd>
-  <dt><code>parameterTypes</code> <span class="badge optional">optional</span> <code>string[]</code></dt>
-  <dd><span class="desc">Ordered list of parameter-type patterns. The method must have exactly this many parameters, each matching at its position.</span></dd>
-  <dt><code>parameterCount</code> <span class="badge optional">optional</span> <code>int?</code></dt>
-  <dd><span class="desc">Exact parameter count. If <code>parameterTypes</code> is also set, the two must agree.</span></dd>
-  <dt><code>declaringNamespace</code> <span class="badge optional">optional</span> <code>string</code></dt>
-  <dd><span class="desc">Exact declaring-namespace filter.</span></dd>
-  <dt><code>declaringTypePattern</code> <span class="badge optional">optional</span> <code>string</code></dt>
-  <dd><span class="desc">Case-insensitive substring filter on the declaring type's short name.</span></dd>
-  <dt><code>accessibility</code> <span class="badge optional">optional</span> <code>AccessibilityFilter</code></dt>
-  <dd><span class="desc">One of <code>Public</code>, <code>PublicProtected</code> (default), <code>All</code>.</span></dd>
-  <dt><code>limit</code> <span class="badge optional">optional</span> <code>int?</code></dt>
-  <dd><span class="desc">Cap on result lines. Default 50.</span></dd>
+<h4 id="tool-find_methods"><code>find_methods</code> <span class="badge badge-readonly">read-only</span></h4>
+
+<p>Search the assembly for methods matching a signature. Any combination of name pattern, return type, parameter types, parameter count, declaring namespace, declaring-type pattern, and accessibility is accepted; constructors and property/event accessors are excluded, operators (<code>op_*</code>) are included.</p>
+
+<p class="tool-meta">Parameters</p>
+<dl class="params">
+  <dt><span class="pname">assembly</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
+  <dt><span class="pname">namePattern</span> <span class="ptype">string?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Case-insensitive substring filter on method name.</dd>
+  <dt><span class="pname">returns</span> <span class="ptype">string?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Return-type pattern. Matches by short name <em>or</em> full name (<code>Pawn</code> or <code>Verse.Pawn</code>). Generics are erased at the top level (<code>List</code> matches <code>List&lt;T&gt;</code> for any <code>T</code>); <code>Nullable&lt;T&gt;</code> is unwrapped (<code>int</code> matches <code>int?</code>); arrays use a trailing <code>[]</code>.</dd>
+  <dt><span class="pname">parameterTypes</span> <span class="ptype">string[]?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Ordered list of parameter-type patterns. The method must have exactly this many parameters, each matching at its position. Same matching rules as <code>returns</code>.</dd>
+  <dt><span class="pname">parameterCount</span> <span class="ptype">int?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Exact parameter count. If <code>parameterTypes</code> is also set, the two must agree.</dd>
+  <dt><span class="pname">declaringNamespace</span> <span class="ptype">string?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Exact declaring namespace, e.g. <code>RimWorld</code> or <code>Verse</code>.</dd>
+  <dt><span class="pname">declaringTypePattern</span> <span class="ptype">string?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Case-insensitive substring filter on the declaring type's short name.</dd>
+  <dt><span class="pname">accessibility</span> <span class="ptype">AccessibilityFilter</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>One of <code>Public</code>, <code>PublicProtected</code> (default), <code>All</code>.</dd>
+  <dt><span class="pname">limit</span> <span class="ptype">int?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Cap on result lines. Default 50.</dd>
 </dl>
-<h4>Returns</h4>
-<p>A header line with the total match count followed by one line per method, each formatted as <code>declaringType.methodName(parameters) &rarr; returnType</code>. Sorted by declaring type, then method name. Constructors and property/event accessors are excluded; operator methods (<code>op_*</code>) are included. If the cap is exceeded, a trailing <code>... (N more matches; raise limit to see all)</code> line is appended. With no matches, returns <code>(no methods match)</code>.</p>
-<h4>Errors</h4>
+
+<p class="tool-meta">Returns</p>
+<p>A header line (<code>N matches</code>, optionally followed by <code>(showing M)</code>) and one signature per match: <code>DeclaringType.MethodName(parameters) → ReturnType</code>, sorted by declaring type then method name. Static methods are prefixed with <code>static</code>. <code>(no methods match)</code> when nothing qualifies.</p>
+
+<p class="tool-meta">Errors</p>
 <ul>
-  <li><code>parameterCount</code> contradicts <code>parameterTypes.Length</code>.</li>
-  <li>Assembly path fails allow-root, traversal, existence, or 200 MB size validation.</li>
+  <li><code>parameterCount (X) contradicts parameterTypes.Length (Y)</code> — both are set but disagree.</li>
+  <li>Standard path-validation errors (see Troubleshooting).</li>
 </ul>
-<h4>See also</h4>
-<p><code>search_types</code> for type-name search, <code>list_members</code> for one type's members, <code>analyze</code> for callers/uses of a specific method.</p>
-</div>
 
-<div class="tool-section">
-<h3 id="t-list-allowed-roots"><code>list_allowed_roots</code> <span class="badge read-only">read-only</span></h3>
-<p>List the directories from which assemblies can be loaded. Useful for an agent to discover what's reachable before issuing a path-bound call.</p>
-<h4>Parameters</h4>
-<p>None.</p>
-<h4>Returns</h4>
-<p>One configured root per line. With no roots configured, returns the literal string <code>No allowed roots configured. The server cannot load any assemblies.</code></p>
-<h4>Errors</h4>
-<p>None reachable from this tool.</p>
-<h4>See also</h4>
-<p>Every other tool's <code>assembly</code> parameter must point inside one of these roots.</p>
-</div>
+<p class="see-also">See also: <code>search_types</code> for short-name matching; <code>analyze</code> with <code>UsedBy</code>/<code>Uses</code> for assignability-aware exploration.</p>
 
-<div class="tool-section">
-<h3 id="t-list-types"><code>list_types</code> <span class="badge read-only">read-only</span></h3>
-<p>List all types in a namespace, by exact namespace match. Returns fully qualified type names sorted alphabetically.</p>
-<h4>Parameters</h4>
-<dl>
-  <dt><code>assembly</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Path to the .NET assembly to inspect (must be under an allowed root).</span></dd>
-  <dt><code>namespaceName</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Namespace to list types from (exact match, case-sensitive).</span></dd>
+<h4 id="tool-list_allowed_roots"><code>list_allowed_roots</code> <span class="badge badge-readonly">read-only</span></h4>
+
+<p>Returns the directories the server was launched with. Any <code>assembly</code> argument to other tools must point to a file under one of these.</p>
+
+<p class="tool-meta">Parameters</p>
+<p class="muted">None.</p>
+
+<p class="tool-meta">Returns</p>
+<p>One root path per line, in the order they were configured. <code>No allowed roots configured. The server cannot load any assemblies.</code> when the server was launched without <code>--allow-root</code> flags.</p>
+
+<p class="tool-meta">Errors</p>
+<p class="muted">None — this tool always succeeds.</p>
+
+<p class="see-also">See also: every other tool's <code>assembly</code> parameter validates against this list.</p>
+
+<h4 id="tool-list_types"><code>list_types</code> <span class="badge badge-readonly">read-only</span></h4>
+
+<p>List every type in a namespace, sorted alphabetically by short name. Output is fully qualified names so they can be fed directly into other tools.</p>
+
+<p class="tool-meta">Parameters</p>
+<dl class="params">
+  <dt><span class="pname">assembly</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Path to the .NET assembly to inspect.</dd>
+  <dt><span class="pname">namespaceName</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Exact namespace, e.g. <code>RimWorld</code> or <code>Verse</code>.</dd>
 </dl>
-<h4>Returns</h4>
-<p>A count header followed by one fully qualified type name per line. With no matches, returns <code>No types found in namespace '&lt;name&gt;'</code>.</p>
-<h4>Errors</h4>
-<ul>
-  <li>Assembly path fails allow-root, traversal, existence, or 200 MB size validation.</li>
-</ul>
-<h4>See also</h4>
-<p><code>search_types</code> for substring search across namespaces, <code>summarize_type</code> for one type's API surface.</p>
-</div>
 
-<div class="tool-section">
-<h3 id="t-search-types"><code>search_types</code> <span class="badge read-only">read-only</span></h3>
-<p>Search for types by case-insensitive substring on the short name (the namespace is not searched). Returns up to 50 matches.</p>
-<h4>Parameters</h4>
-<dl>
-  <dt><code>assembly</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Path to the .NET assembly to inspect (must be under an allowed root).</span></dd>
-  <dt><code>pattern</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Search pattern matched against the type short name.</span></dd>
+<p class="tool-meta">Returns</p>
+<p>A header line <code>N types:</code> followed by one fully qualified name per line. <code>No types found in namespace 'X'</code> when the namespace contains nothing.</p>
+
+<p class="tool-meta">Errors</p>
+<ul>
+  <li>Standard path-validation errors (see Troubleshooting).</li>
+</ul>
+
+<p class="see-also">See also: <code>search_types</code> when you don't know which namespace to scan.</p>
+
+<h4 id="tool-search_types"><code>search_types</code> <span class="badge badge-readonly">read-only</span></h4>
+
+<p>Find types whose short name contains a pattern (case-insensitive substring; the namespace is not part of the match). Capped at 50 matches.</p>
+
+<p class="tool-meta">Parameters</p>
+<dl class="params">
+  <dt><span class="pname">assembly</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Path to the .NET assembly to inspect.</dd>
+  <dt><span class="pname">pattern</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Substring matched case-insensitively against each type's short name. <code>Plant</code> finds <code>PlantProperties</code>, <code>PlantUtility</code>, etc.</dd>
 </dl>
-<h4>Returns</h4>
-<p>A count header followed by up to 50 fully qualified type names, sorted alphabetically. If more than 50 types match, a trailing <code>... (truncated, more than 50 matches)</code> line is appended. With no matches, returns <code>No types matching '&lt;pattern&gt;'</code>.</p>
-<h4>Errors</h4>
-<ul>
-  <li>Assembly path fails allow-root, traversal, existence, or 200 MB size validation.</li>
-</ul>
-<h4>See also</h4>
-<p><code>list_types</code> when the namespace is known, <code>find_methods</code> for method-shape search.</p>
-</div>
 
-<h3 id="cat-inspection">Inspection</h3>
+<p class="tool-meta">Returns</p>
+<p>A header line <code>N matches:</code> followed by one fully qualified name per line. When more than 50 types match, the response is truncated and ends with <code>... (truncated, more than 50 matches)</code>. <code>No types matching 'pattern'</code> when nothing qualifies.</p>
 
-<div class="tool-section">
-<h3 id="t-analyze"><code>analyze</code> <span class="badge read-only">read-only</span></h3>
-<p>Run cross-reference analysis on a type or member. The set of valid <code>kind</code> values depends on the symbol category that the type or member resolves to.</p>
-<h4>Valid kinds by symbol category</h4>
+<p class="tool-meta">Errors</p>
 <ul>
-  <li><strong>Type</strong> &mdash; <code>UsedBy</code>, <code>InstantiatedBy</code>, <code>ExposedBy</code>, <code>ExtensionMethods</code>, <code>AppliedTo</code></li>
-  <li><strong>Method</strong> &mdash; <code>UsedBy</code>, <code>OverriddenBy</code>, <code>ImplementedBy</code>, <code>Uses</code>, <code>Implements</code></li>
-  <li><strong>Property</strong> &mdash; <code>OverriddenBy</code>, <code>ImplementedBy</code></li>
-  <li><strong>Field</strong> &mdash; <code>ReadBy</code>, <code>AssignedBy</code></li>
-  <li><strong>Event</strong> &mdash; <code>OverriddenBy</code>, <code>ImplementedBy</code></li>
+  <li>Standard path-validation errors (see Troubleshooting).</li>
 </ul>
-<p><code>AppliedTo</code> is meaningful only on attribute-derived types &mdash; a non-attribute type returns an empty result, not an error.</p>
-<h4>Parameters</h4>
-<dl>
-  <dt><code>assembly</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Path to the .NET assembly to inspect (must be under an allowed root).</span></dd>
-  <dt><code>typeName</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Fully qualified type name. Nested types accept either <code>Outer+Inner</code> or <code>Outer.Inner</code>.</span></dd>
-  <dt><code>kind</code> <span class="badge required">required</span> <code>AnalysisKind</code></dt>
-  <dd><span class="desc">One of the analysis kinds listed above.</span></dd>
-  <dt><code>memberName</code> <span class="badge optional">optional</span> <code>string</code></dt>
-  <dd><span class="desc">Member name. Omit (or pass empty string) to analyze the type itself. Resolution tries method, then property, then field, then event.</span></dd>
-  <dt><code>parameterCount</code> <span class="badge optional">optional</span> <code>int?</code></dt>
-  <dd><span class="desc">Method overload disambiguator (only meaningful when <code>memberName</code> resolves to a method).</span></dd>
-  <dt><code>limit</code> <span class="badge optional">optional</span> <code>int?</code></dt>
-  <dd><span class="desc">Cap on result lines. Default 50.</span></dd>
+
+<p class="see-also">See also: <code>list_types</code> for whole-namespace listing; <code>find_methods</code> for method-shape search.</p>
+
+<h3 id="tools-inspection">Inspection</h3>
+
+<h4 id="tool-analyze"><code>analyze</code> <span class="badge badge-readonly">read-only</span></h4>
+
+<p>Run cross-reference analysis on a type or member. Each <code>kind</code> applies only to certain symbol categories; passing the wrong combination produces a clear error rather than empty results.</p>
+
+<p class="tool-meta">Valid kinds by symbol category</p>
+
+<table>
+  <thead>
+    <tr><th>Symbol</th><th>Kinds</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Type</td><td><code>UsedBy</code>, <code>InstantiatedBy</code>, <code>ExposedBy</code>, <code>ExtensionMethods</code>, <code>AppliedTo</code></td></tr>
+    <tr><td>Method</td><td><code>UsedBy</code>, <code>OverriddenBy</code>, <code>ImplementedBy</code>, <code>Uses</code>, <code>Implements</code></td></tr>
+    <tr><td>Property</td><td><code>OverriddenBy</code>, <code>ImplementedBy</code></td></tr>
+    <tr><td>Field</td><td><code>ReadBy</code>, <code>AssignedBy</code></td></tr>
+    <tr><td>Event</td><td><code>OverriddenBy</code>, <code>ImplementedBy</code></td></tr>
+  </tbody>
+</table>
+
+<p><code>AppliedTo</code> is meaningful only on <code>Attribute</code>-derived types; on a non-attribute type the underlying analyzer's <code>Show(symbol)</code> returns false and the result is empty (not an error).</p>
+
+<p class="tool-meta">Parameters</p>
+<dl class="params">
+  <dt><span class="pname">assembly</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Path to the .NET assembly to inspect.</dd>
+  <dt><span class="pname">typeName</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Fully qualified type name, e.g. <code>RimWorld.PlantProperties</code>.</dd>
+  <dt><span class="pname">kind</span> <span class="ptype">AnalysisKind</span> <span class="badge badge-required">required</span></dt>
+  <dd>One of the values in the table above.</dd>
+  <dt><span class="pname">memberName</span> <span class="ptype">string?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Member name. Omit (or pass empty string) to analyze the type itself; otherwise the resolver tries method → property → field → event in turn.</dd>
+  <dt><span class="pname">parameterCount</span> <span class="ptype">int?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Method-overload disambiguator. Used only when <code>memberName</code> resolves to a method with multiple overloads.</dd>
+  <dt><span class="pname">limit</span> <span class="ptype">int?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Cap on result lines. Default 50.</dd>
 </dl>
-<h4>Returns</h4>
-<p>A header line of the form <code>&lt;Header&gt; &mdash; &lt;symbol&gt; [origin]:</code> followed by formatted result symbols, one per line. The origin tag indicates whether the resolved member was declared, inherited, or an extension method.</p>
-<h4>Errors</h4>
-<ul>
-  <li><code>Analysis kind 'X' is not valid for &lt;Category&gt;. Valid kinds for &lt;Category&gt;: ...</code></li>
-  <li><code>Type not found: &lt;name&gt;</code></li>
-  <li><code>Member '&lt;name&gt;' not found on &lt;type&gt;, its base types, or as an extension method</code></li>
-  <li><code>'&lt;method&gt;' on &lt;context&gt; has N overloads. Specify parameterCount to disambiguate: ...</code></li>
-  <li><code>No overload of '&lt;method&gt;' on &lt;context&gt; with N parameters. Available: ...</code></li>
-  <li>Assembly path fails allow-root, traversal, existence, or 200 MB size validation.</li>
-</ul>
-<h4>See also</h4>
-<p><code>decompile_method</code> to read the body of a method <code>analyze</code> reports as a caller; <code>list_members</code> to find candidate <code>memberName</code> values.</p>
-</div>
 
-<div class="tool-section">
-<h3 id="t-list-members"><code>list_members</code> <span class="badge read-only">read-only</span></h3>
-<p>List members of a type grouped by kind (Methods, Properties, Fields, Events). One signature per line, no method bodies, no XML doc. Filter by kind, accessibility, and name; optionally walk base types up to <code>System.Object</code>. Cheaper than <code>summarize_type</code> when only part of the surface is needed.</p>
-<h4>Parameters</h4>
-<dl>
-  <dt><code>assembly</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Path to the .NET assembly to inspect (must be under an allowed root).</span></dd>
-  <dt><code>typeName</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Fully qualified type name.</span></dd>
-  <dt><code>kinds</code> <span class="badge optional">optional</span> <code>MemberKind[]</code></dt>
-  <dd><span class="desc">Subset of <code>Method</code>, <code>Property</code>, <code>Field</code>, <code>Event</code>. Omit to include all four.</span></dd>
-  <dt><code>accessibility</code> <span class="badge optional">optional</span> <code>AccessibilityFilter</code></dt>
-  <dd><span class="desc">One of <code>Public</code>, <code>PublicProtected</code> (default), <code>All</code>.</span></dd>
-  <dt><code>namePattern</code> <span class="badge optional">optional</span> <code>string</code></dt>
-  <dd><span class="desc">Case-insensitive substring filter on the member name.</span></dd>
-  <dt><code>includeInherited</code> <span class="badge optional">optional</span> <code>bool</code></dt>
-  <dd><span class="desc">Walk base types up to (but not including) <code>System.Object</code>. Default <code>false</code>. Inherited members carry an <code>[from &lt;BaseType&gt;]</code> tag; overrides hide their bases.</span></dd>
-  <dt><code>limit</code> <span class="badge optional">optional</span> <code>int?</code></dt>
-  <dd><span class="desc">Cap on total result lines across all kinds. Default 100.</span></dd>
+<p class="tool-meta">Returns</p>
+<p>A header line in the form <code>&lt;Header&gt; — &lt;Symbol&gt; [origin]:</code> (origin appears for inherited or extension members), followed by one symbol per line up to the limit.</p>
+
+<p class="tool-meta">Errors</p>
+<ul>
+  <li><code>Analysis kind 'X' is not valid for &lt;Category&gt;. Valid kinds for &lt;Category&gt;: …</code> — the chosen kind doesn't apply to the resolved symbol's category.</li>
+  <li><code>Type not found: &lt;name&gt;</code> — <code>typeName</code> doesn't resolve.</li>
+  <li><code>Member '&lt;name&gt;' not found on &lt;type&gt;, its base types, or as an extension method</code> — <code>memberName</code> doesn't resolve.</li>
+  <li><code>'&lt;name&gt;' on &lt;type&gt; has N overloads. Specify parameterCount to disambiguate: …</code> — ambiguous method overload.</li>
+  <li><code>No overload of '&lt;name&gt;' on &lt;type&gt; with N parameters. Available: …</code> — <code>parameterCount</code> doesn't match any overload.</li>
+  <li>Standard path-validation errors (see Troubleshooting).</li>
+</ul>
+
+<p class="see-also">See also: <code>summarize_type</code> for the API surface; <code>decompile_method</code> to read a method body after locating its callers via <code>UsedBy</code>.</p>
+
+<h4 id="tool-list_members"><code>list_members</code> <span class="badge badge-readonly">read-only</span></h4>
+
+<p>List members of a type, grouped by kind (Methods, Properties, Fields, Events). One signature per line — no method bodies, no XML doc. Cheaper than <code>summarize_type</code> when you only need part of the API surface or want inherited members included.</p>
+
+<p class="tool-meta">Parameters</p>
+<dl class="params">
+  <dt><span class="pname">assembly</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Path to the .NET assembly to inspect.</dd>
+  <dt><span class="pname">typeName</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Fully qualified type name, e.g. <code>RimWorld.PlantProperties</code>.</dd>
+  <dt><span class="pname">kinds</span> <span class="ptype">MemberKind[]?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Subset of <code>Method</code>, <code>Property</code>, <code>Field</code>, <code>Event</code>. Omit (or pass empty) to include all four.</dd>
+  <dt><span class="pname">accessibility</span> <span class="ptype">AccessibilityFilter</span> <span class="badge badge-optional">optional</span></dt>
+  <dd><code>Public</code>, <code>PublicProtected</code> (default), or <code>All</code>.</dd>
+  <dt><span class="pname">namePattern</span> <span class="ptype">string?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Case-insensitive substring filter on member name.</dd>
+  <dt><span class="pname">includeInherited</span> <span class="ptype">bool</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Include members declared on base types (stops at <code>System.Object</code>). Inherited members carry an <code>[from &lt;BaseType&gt;]</code> annotation; an override hides the base. Default <code>false</code>.</dd>
+  <dt><span class="pname">limit</span> <span class="ptype">int?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Cap on total result lines across all kinds. Default 100.</dd>
 </dl>
-<h4>Returns</h4>
-<p>The type's full name, then one section per kind that has matches (<code>Methods (N):</code>, etc.) with one signature per line. If the cap truncates the output, a trailing <code>... (truncated, N more members; raise limit to see all)</code> line is appended. With no matches, returns <code>&lt;type&gt;: no members match the filter.</code></p>
-<h4>Errors</h4>
-<ul>
-  <li><code>Type not found: &lt;name&gt;</code></li>
-  <li>Assembly path fails allow-root, traversal, existence, or 200 MB size validation.</li>
-</ul>
-<h4>See also</h4>
-<p><code>summarize_type</code> for the full public surface in C# syntax; <code>find_methods</code> for cross-type method search.</p>
-</div>
 
-<div class="tool-section">
-<h3 id="t-summarize-type"><code>summarize_type</code> <span class="badge read-only">read-only</span></h3>
-<p>Public and protected API surface of a type, rendered as C#-shaped declarations with method bodies stripped. Decompiles the type, then walks the syntax tree removing non-public members and replacing bodies with semicolons. Interface members are kept regardless of modifiers.</p>
-<h4>Parameters</h4>
-<dl>
-  <dt><code>assembly</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Path to the .NET assembly to inspect (must be under an allowed root).</span></dd>
-  <dt><code>typeName</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Fully qualified type name.</span></dd>
+<p class="tool-meta">Returns</p>
+<p>The fully qualified type name (with <code>(with inherited)</code> appended when applicable), then a section per non-empty kind: <code>Methods (N):</code> / <code>Properties (N):</code> / <code>Fields (N):</code> / <code>Events (N):</code>, each followed by one indented signature per member. When the limit truncates output, the last line is <code>... (truncated, M more members; raise limit to see all)</code>. <code>&lt;Type&gt;: no members match the filter.</code> when nothing qualifies.</p>
+
+<p class="tool-meta">Errors</p>
+<ul>
+  <li><code>Type not found: &lt;name&gt;</code> — <code>typeName</code> doesn't resolve.</li>
+  <li>Standard path-validation errors (see Troubleshooting).</li>
+</ul>
+
+<p class="see-also">See also: <code>summarize_type</code> for the full public/protected surface as C# (with type signature, base list, attributes); <code>find_methods</code> to search across the whole assembly.</p>
+
+<h4 id="tool-summarize_type"><code>summarize_type</code> <span class="badge badge-readonly">read-only</span></h4>
+
+<p>Render the public and protected API surface of a type as C# — class signature, base list, attributes, member declarations, but no method bodies. The output is the decompiled syntax tree with non-public members removed and bodies replaced with <code>;</code>. Quick when you want the shape of a type without the implementation.</p>
+
+<p class="tool-meta">Parameters</p>
+<dl class="params">
+  <dt><span class="pname">assembly</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Path to the .NET assembly to inspect.</dd>
+  <dt><span class="pname">typeName</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Fully qualified type name, e.g. <code>RimWorld.PlantProperties</code>.</dd>
 </dl>
-<h4>Returns</h4>
-<p>A multi-line C# block: the type declaration with its surviving members, each method or constructor terminated by <code>;</code> instead of a body. Property and indexer accessors are present but empty. Destructors are removed.</p>
-<h4>Errors</h4>
+
+<p class="tool-meta">Returns</p>
+<p>A C# string with the type's declaration, public/protected members (operators and indexers included; destructors excluded), and stripped bodies. Interface members are kept regardless of explicit modifier (interfaces don't carry an explicit <code>public</code> in C# but are implicitly public).</p>
+
+<p class="tool-meta">Errors</p>
 <ul>
-  <li><code>Type not found: &lt;name&gt;</code></li>
-  <li>Assembly path fails allow-root, traversal, existence, or 200 MB size validation.</li>
+  <li><code>Type not found: &lt;name&gt;</code> — <code>typeName</code> doesn't resolve.</li>
+  <li>Standard path-validation errors (see Troubleshooting).</li>
 </ul>
-<h4>See also</h4>
-<p><code>list_members</code> for filtered or partial surface; <code>decompile_type</code> for the full implementation; <code>decompile_method</code> for one method body.</p>
-</div>
 
-<h3 id="cat-decompilation">Decompilation</h3>
+<p class="see-also">See also: <code>list_members</code> for filtered or inherited surface; <code>decompile_type</code> when you actually need the bodies.</p>
 
-<div class="tool-section">
-<h3 id="t-decompile-method"><code>decompile_method</code> <span class="badge read-only">read-only</span></h3>
-<p>Decompile a single method to C# source. Faster and more focused than <code>decompile_type</code> when only one method is needed.</p>
-<h4>Parameters</h4>
-<dl>
-  <dt><code>assembly</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Path to the .NET assembly to inspect (must be under an allowed root).</span></dd>
-  <dt><code>typeName</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Fully qualified type name that declares (or inherits) the method.</span></dd>
-  <dt><code>methodName</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Method name.</span></dd>
-  <dt><code>parameterCount</code> <span class="badge optional">optional</span> <code>int?</code></dt>
-  <dd><span class="desc">Number of parameters, used to disambiguate overloads. Same-arity overloads return the first match.</span></dd>
+<h3 id="tools-decompilation">Decompilation</h3>
+
+<h4 id="tool-decompile_method"><code>decompile_method</code> <span class="badge badge-readonly">read-only</span></h4>
+
+<p>Decompile a single method to C#. Faster and tokens-cheaper than <code>decompile_type</code> when you only need one method body.</p>
+
+<p class="tool-meta">Parameters</p>
+<dl class="params">
+  <dt><span class="pname">assembly</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Path to the .NET assembly to inspect.</dd>
+  <dt><span class="pname">typeName</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Fully qualified type name, e.g. <code>RimWorld.MainTabWindow_Research</code>.</dd>
+  <dt><span class="pname">methodName</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Method name, e.g. <code>ListProjects</code>.</dd>
+  <dt><span class="pname">parameterCount</span> <span class="ptype">int?</span> <span class="badge badge-optional">optional</span></dt>
+  <dd>Number of parameters, used to disambiguate overloads.</dd>
 </dl>
-<h4>Returns</h4>
-<p>A header comment of the form <code>// &lt;Type&gt;.&lt;Method&gt; [origin]</code> followed by the decompiled method source. The origin tag is present only when the method was found through inheritance or as an extension method.</p>
-<h4>Errors</h4>
-<ul>
-  <li><code>Type not found: &lt;name&gt;</code></li>
-  <li><code>Method '&lt;name&gt;' not found on &lt;type&gt;, its base types, or as an extension method</code></li>
-  <li><code>'&lt;method&gt;' on &lt;context&gt; has N overloads. Specify parameterCount to disambiguate: ...</code></li>
-  <li><code>No overload of '&lt;method&gt;' on &lt;context&gt; with N parameters. Available: ...</code></li>
-  <li>Assembly path fails allow-root, traversal, existence, or 200 MB size validation.</li>
-</ul>
-<h4>See also</h4>
-<p><code>analyze</code> with <code>kind=UsedBy</code> for callers; <code>summarize_type</code> for the surrounding type's API.</p>
-</div>
 
-<div class="tool-section">
-<h3 id="t-decompile-type"><code>decompile_type</code> <span class="badge read-only">read-only</span></h3>
-<p>Decompile a whole type to C# source, including all member implementations. Use this only when the full body is needed; the response can be large.</p>
-<h4>Parameters</h4>
-<dl>
-  <dt><code>assembly</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Path to the .NET assembly to inspect (must be under an allowed root).</span></dd>
-  <dt><code>typeName</code> <span class="badge required">required</span> <code>string</code></dt>
-  <dd><span class="desc">Fully qualified type name.</span></dd>
-</dl>
-<h4>Returns</h4>
-<p>The full C# source of the type as one string.</p>
-<h4>Errors</h4>
+<p class="tool-meta">Returns</p>
+<p>A header comment (<code>// &lt;Type&gt;.&lt;Method&gt;</code>, with origin annotation when the method is inherited or an extension) followed by the decompiled C# source.</p>
+
+<p class="tool-meta">Errors</p>
 <ul>
-  <li><code>Type not found: &lt;name&gt;</code></li>
-  <li>Assembly path fails allow-root, traversal, existence, or 200 MB size validation.</li>
+  <li><code>Type not found: &lt;name&gt;</code> — <code>typeName</code> doesn't resolve.</li>
+  <li><code>Method '&lt;name&gt;' not found on &lt;type&gt;, its base types, or as an extension method</code> — <code>methodName</code> doesn't resolve.</li>
+  <li><code>'&lt;name&gt;' on &lt;type&gt; has N overloads. Specify parameterCount to disambiguate: …</code> — ambiguous method overload.</li>
+  <li><code>No overload of '&lt;name&gt;' on &lt;type&gt; with N parameters. Available: …</code> — <code>parameterCount</code> doesn't match any overload.</li>
+  <li>Standard path-validation errors (see Troubleshooting).</li>
 </ul>
-<h4>See also</h4>
-<p><code>summarize_type</code> for signature-only output; <code>decompile_method</code> when only one method body is needed.</p>
-</div>
+
+<p class="see-also">See also: <code>analyze</code> with <code>UsedBy</code> to find callers before reading the body; <code>decompile_type</code> when you need the surrounding class.</p>
+
+<h4 id="tool-decompile_type"><code>decompile_type</code> <span class="badge badge-readonly">read-only</span></h4>
+
+<p>Decompile a type to its full C# source — every member, every body. The most expensive read in the toolkit; reach for <code>summarize_type</code> or <code>decompile_method</code> first when possible.</p>
+
+<p class="tool-meta">Parameters</p>
+<dl class="params">
+  <dt><span class="pname">assembly</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Path to the .NET assembly to inspect.</dd>
+  <dt><span class="pname">typeName</span> <span class="ptype">string</span> <span class="badge badge-required">required</span></dt>
+  <dd>Fully qualified type name, e.g. <code>RimWorld.PlantUtility</code> or <code>Verse.Thing</code>.</dd>
+</dl>
+
+<p class="tool-meta">Returns</p>
+<p>The complete C# source of the type as decompiled by <code>ICSharpCode.Decompiler</code>.</p>
+
+<p class="tool-meta">Errors</p>
+<ul>
+  <li><code>Type not found: &lt;name&gt;</code> — <code>typeName</code> doesn't resolve.</li>
+  <li>Standard path-validation errors (see Troubleshooting).</li>
+</ul>
+
+<p class="see-also">See also: <code>summarize_type</code> for signatures only; <code>decompile_method</code> for a single method.</p>
 
 <h2 id="troubleshooting">Troubleshooting</h2>
 
-<p>Errors surface as <code>Error: &lt;ExceptionType&gt;: &lt;Message&gt;</code>. Common cases:</p>
+<table>
+  <thead>
+    <tr><th>Error message contains</th><th>Likely cause</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>No allowed roots configured</code></td>
+      <td>The server was launched without any <code>--allow-root</code> flags. Add at least one and start a new Claude Code session.</td>
+    </tr>
+    <tr>
+      <td><code>Assembly path is empty</code></td>
+      <td>Empty or whitespace-only <code>assembly</code> argument.</td>
+    </tr>
+    <tr>
+      <td><code>Path contains '..' which is not allowed</code></td>
+      <td>The requested path has a literal <code>..</code> segment. Pass the resolved absolute path instead.</td>
+    </tr>
+    <tr>
+      <td><code>Path is not under any allowed root</code></td>
+      <td>The assembly is real but lives outside every <code>--allow-root</code> directory. Either move the file under an existing root or relaunch with an additional <code>--allow-root</code> flag.</td>
+    </tr>
+    <tr>
+      <td><code>Assembly file does not exist</code></td>
+      <td>Typo in the path, or the file was renamed/deleted after launch.</td>
+    </tr>
+    <tr>
+      <td><code>Assembly exceeds 200 MB size cap</code></td>
+      <td>The 200 MB hard cap is exceeded. ILens does not provide a flag to raise this — split the workload to a smaller assembly if possible.</td>
+    </tr>
+    <tr>
+      <td><code>Type not found</code></td>
+      <td>Fully qualified name didn't match. Check namespace; for nested types use <code>Outer+Inner</code> (or <code>Outer.Inner</code>, which the resolver also tries). Use <code>search_types</code> to discover the right name.</td>
+    </tr>
+    <tr>
+      <td><code>Method '…' not found</code> / <code>Member '…' not found</code></td>
+      <td>The name doesn't exist on the type, its base types, or as an extension method. Run <code>list_members</code> with a <code>namePattern</code> to find similar names.</td>
+    </tr>
+    <tr>
+      <td><code>has N overloads. Specify parameterCount to disambiguate</code></td>
+      <td>Multiple methods share the same name on the type. Pass <code>parameterCount</code> matching the intended overload.</td>
+    </tr>
+    <tr>
+      <td><code>No overload of … with N parameters</code></td>
+      <td><code>parameterCount</code> doesn't match any overload. The error message lists the available overloads.</td>
+    </tr>
+    <tr>
+      <td><code>Analysis kind 'X' is not valid for &lt;Category&gt;</code></td>
+      <td>The <code>kind</code> doesn't apply to the resolved symbol's category. Pick from the kinds listed for that category in the <a href="#tool-analyze"><code>analyze</code></a> table.</td>
+    </tr>
+    <tr>
+      <td><code>parameterCount (X) contradicts parameterTypes.Length (Y)</code></td>
+      <td><code>find_methods</code> got both <code>parameterCount</code> and <code>parameterTypes</code> with conflicting cardinalities. Drop one or align them.</td>
+    </tr>
+  </tbody>
+</table>
 
-<dl>
-  <dt><code>No allowed roots configured. The server cannot load any assemblies.</code></dt>
-  <dd><span class="desc">The server was launched without any <code>--allow-root</code> flags. Add at least one in <code>.mcp.json</code> (or via <code>claude mcp add</code>) and start a new session.</span></dd>
+<h2 id="appendix-cli">Appendix A: <code>claude mcp add</code> CLI</h2>
 
-  <dt><code>--allow-root path does not exist: &lt;path&gt;</code></dt>
-  <dd><span class="desc">A configured root directory does not exist on disk. Fix the path in the MCP configuration.</span></dd>
+<p>If you'd rather not edit <code>.mcp.json</code> by hand, the CLI has an equivalent:</p>
 
-  <dt><code>Path is not under any allowed root: &lt;path&gt;. Allowed roots: ...</code></dt>
-  <dd><span class="desc">The requested assembly path normalizes outside every configured root. Either move the assembly inside an allow-root or add a new root.</span></dd>
+<pre><code>claude mcp add ilens "C:\path\to\ILens.exe" --allow-root "C:\path\to\dlls"</code></pre>
 
-  <dt><code>Path contains '..' which is not allowed: &lt;path&gt;</code></dt>
-  <dd><span class="desc">The requested path contains a literal <code>..</code> segment. Pass an absolute or already-normalized path.</span></dd>
+<p>Run inside the project directory. The same session-restart caveat applies: registration takes effect on the next new session, not the current one.</p>
 
-  <dt><code>Assembly path is empty.</code></dt>
-  <dd><span class="desc">The <code>assembly</code> argument was missing or whitespace.</span></dd>
+<h2 id="appendix-desktop">Appendix B: Claude Desktop</h2>
 
-  <dt><code>Assembly file does not exist: &lt;path&gt;</code></dt>
-  <dd><span class="desc">The path validates against the allow-roots but no file is at that location.</span></dd>
+<p>Claude Desktop reads its MCP server list from <code>%APPDATA%\Claude\claude_desktop_config.json</code> on Windows. Add an entry equivalent to the Claude Code one:</p>
 
-  <dt><code>Assembly exceeds 200 MB size cap (actual: N MB): &lt;path&gt;</code></dt>
-  <dd><span class="desc">The file is over the hard cap. There is no flag to raise this; trim the assembly or load a slimmer one.</span></dd>
+<pre><code>{
+  "mcpServers": {
+    "ilens": {
+      "command": "C:\\path\\to\\ILens.exe",
+      "args": [
+        "--allow-root", "C:\\path\\to\\dlls"
+      ]
+    }
+  }
+}</code></pre>
 
-  <dt><code>Type not found: &lt;name&gt;</code></dt>
-  <dd><span class="desc">The fully qualified name does not match any type. Try <code>search_types</code> with a substring; for nested types, use <code>Outer+Inner</code> (<code>.</code> also works).</span></dd>
+<p>Claude Desktop has no per-project <code>CLAUDE.md</code> — there's no project boundary in the desktop client. Paste the snippet from the <a href="#project-guidance">Project-level guidance</a> section into your Claude Desktop Project's custom instructions instead, so the prefer-MCP rule still applies in conversations that touch your assemblies.</p>
 
-  <dt><code>Method '&lt;name&gt;' not found on &lt;type&gt;, its base types, or as an extension method</code></dt>
-  <dd><span class="desc">The method name is not declared, inherited, or available as an extension. <code>list_members</code> shows what is on the type.</span></dd>
-
-  <dt><code>'&lt;method&gt;' on &lt;context&gt; has N overloads. Specify parameterCount to disambiguate: ...</code></dt>
-  <dd><span class="desc">Two or more overloads share the name. Pass <code>parameterCount</code>; same-arity overloads still match the first found, by parameter count only.</span></dd>
-
-  <dt><code>No overload of '&lt;method&gt;' on &lt;context&gt; with N parameters. Available: ...</code></dt>
-  <dd><span class="desc">The supplied <code>parameterCount</code> matches none of the overloads. The error lists the available signatures.</span></dd>
-
-  <dt><code>Analysis kind 'X' is not valid for &lt;Category&gt;. Valid kinds for &lt;Category&gt;: ...</code></dt>
-  <dd><span class="desc">The <code>kind</code> argument does not apply to the resolved symbol category. The error lists the kinds that do.</span></dd>
-
-  <dt><code>parameterCount (N) contradicts parameterTypes.Length (M)</code></dt>
-  <dd><span class="desc">From <code>find_methods</code>: both are set but disagree. Drop one or align them.</span></dd>
-
-  <dt>Empty <code>analyze</code> result on an attribute target</dt>
-  <dd><span class="desc"><code>AppliedTo</code> is the only kind that runs on a non-method symbol but only fires when the type derives from <code>System.Attribute</code>. A non-attribute target returns an empty list, not an error.</span></dd>
-
-  <dt>Long pause on first call to a fresh assembly</dt>
-  <dd><span class="desc">The decompiler is single-threaded per assembly and the first decompile triggers full type-system load. Subsequent calls are fast. The LRU cache holds five assemblies; loading a sixth evicts the least-recently-used one (logged to stderr).</span></dd>
-</dl>
-
-<h2 id="about">Version, source, license</h2>
+<h2 id="colophon">Version, source, license</h2>
 
 <ul>
-  <li><strong>Version:</strong> <span class="version">1</span></li>
-  <li><strong>License:</strong> MIT &mdash; see the bundled <code>LICENSE</code> file.</li>
-  <li><strong>Third-party licenses:</strong> see <code>third-party-licenses/manifest.json</code> in the release ZIP for the full dependency list with license names and URLs; the <code>third-party-licenses/</code> directory contains the downloaded license texts.</li>
+  <li><strong>Version</strong>: 2 (target framework <code>net8.0</code>, runtime identifier <code>win-x64</code>)</li>
+  <li><strong>License</strong>: MIT (see bundled <code>LICENSE</code>)</li>
+  <li><strong>Third-party attribution</strong>: see <code>third-party-licenses/INDEX.md</code> in the release archive for the per-source mapping of every bundled NuGet package and the .NET runtime's third-party components</li>
+  <li><strong>Decompiler infrastructure</strong>: <code>ICSharpCode.Decompiler</code> + <code>ICSharpCode.ILSpyX</code> (9.1.0.7988)</li>
+  <li><strong>MCP SDK</strong>: <code>ModelContextProtocol</code> 1.2.0 (stdio transport)</li>
 </ul>
-
-</div>
 
 </body>
 </html>
