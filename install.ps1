@@ -43,7 +43,7 @@ if (Test-Path $installDir) {
         Remove-Item -Path $installDir -Recurse -Force
     } catch {
         throw @"
-Could not remove existing install at $installDir: $($_.Exception.Message)
+Could not remove existing install at ${installDir}: $($_.Exception.Message)
 A running 'ilens.exe' process may be holding files open. Close any MCP client
 sessions that loaded ILens (Claude Code, etc.) and re-run the installer.
 "@
@@ -56,7 +56,7 @@ try {
     New-Item -Path $installDir -ItemType Directory -Force | Out-Null
     Expand-Archive -Path $tempZip -DestinationPath $installDir -Force
 } catch {
-    throw "Could not extract $tempZip to $installDir: $($_.Exception.Message)"
+    throw "Could not extract $tempZip to ${installDir}: $($_.Exception.Message)"
 } finally {
     if (Test-Path $tempZip) {
         Remove-Item -Path $tempZip -Force -ErrorAction SilentlyContinue

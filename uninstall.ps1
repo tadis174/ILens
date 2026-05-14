@@ -22,7 +22,7 @@ if (Test-Path $installDir) {
         Remove-Item -Path $installDir -Recurse -Force
     } catch {
         throw @"
-Could not remove $installDir: $($_.Exception.Message)
+Could not remove ${installDir}: $($_.Exception.Message)
 A running 'ilens.exe' process may be holding files open. Close any MCP client
 sessions that loaded ILens (Claude Code, etc.) and re-run the uninstaller.
 "@

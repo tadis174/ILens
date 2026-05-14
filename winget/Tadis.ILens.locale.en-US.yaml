@@ -3,7 +3,7 @@
 # Other fields are largely static; bump only when publisher metadata changes.
 
 PackageIdentifier: Tadis.ILens
-PackageVersion: 4
+PackageVersion: 5
 PackageLocale: en-US
 Publisher: Tadis
 PublisherUrl: https://github.com/tadis174

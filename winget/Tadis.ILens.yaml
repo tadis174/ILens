@@ -3,7 +3,7 @@
 # PackageVersion tracks Core/Core.csproj <Version> (forward-pointing).
 
 PackageIdentifier: Tadis.ILens
-PackageVersion: 4
+PackageVersion: 5
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.10.0
