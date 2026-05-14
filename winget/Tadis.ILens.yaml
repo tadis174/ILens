@@ -1,0 +1,9 @@
+# Winget version manifest for ILens.
+# Top-level stub linking the installer and locale manifests.
+# PackageVersion tracks Core/Core.csproj <Version> (forward-pointing).
+
+PackageIdentifier: Tadis.ILens
+PackageVersion: 4
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.10.0

@@ -1,0 +1,32 @@
+using System.ComponentModel;
+using ModelContextProtocol.Server;
+
+namespace ILens.Tools;
+
+[McpServerToolType]
+public static class DecompileMethodTool
+{
+    [McpServerTool(Name = "decompile_method", ReadOnly = true),
+     Description("Decompile a single method to C# source code. " +
+        "Faster and more focused than decompile_type when you only need one method.")]
+    public static string DecompileMethod(
+        AssemblyHostRegistry registry,
+        [Description("Path to the .NET assembly to inspect (must be under an allowed root).")] string assembly,
+        [Description("Fully qualified type name, e.g. 'System.IO.File'.")] string typeName,
+        [Description("Method name, e.g. 'ReadAllText'.")] string methodName,
+        [Description("Number of parameters, to disambiguate overloads. If parameterTypes is also given, the two must agree.")] int? parameterCount = null,
+        [Description("Ordered parameter-type patterns to disambiguate same-arity overloads, e.g. ['String'] or ['Int32','Boolean']. Same loose matching as find_methods: short or full name, generics erased, '[]' for arrays.")] string[] parameterTypes = null)
+    {
+        var host = registry.GetOrLoad(assembly);
+        var resolver = host.Resolver;
+        var type = resolver.ResolveType(typeName);
+        var (method, origin) = resolver.ResolveMethod(type, methodName, parameterCount, parameterTypes);
+
+        var header = origin.Kind == "declared"
+            ? $"// {type.FullName}.{methodName}"
+            : $"// {type.FullName}.{methodName} {origin.Format()}";
+
+        var source = host.DecompileMethod(method);
+        return $"{header}\n{source}";
+    }
+}

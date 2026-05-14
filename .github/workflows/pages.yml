@@ -30,10 +30,15 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v4
 
-      - name: Upload Build/doc/ as Pages artifact
+      - name: Stage the user guide for Pages
+        run: |
+          mkdir -p _site
+          cp Build/doc/guide.html _site/
+
+      - name: Upload the user guide as Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: Build/doc
+          path: _site
 
       - name: Deploy to Pages
         id: deployment

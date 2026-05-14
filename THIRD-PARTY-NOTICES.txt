@@ -1,5 +1,5 @@
 ILens is MIT-licensed (see LICENSE). The release archive bundles third-party
 software whose per-source attributions ship in third-party-licenses/. The
-bundled .NET 8 runtime contributes its own third-party notices, included in
+bundled .NET 10 runtime contributes its own third-party notices, included in
 that directory as dotnet-runtime-THIRD-PARTY-NOTICES.txt. Start with
 third-party-licenses/INDEX.md for the full mapping.
