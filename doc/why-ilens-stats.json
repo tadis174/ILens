@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "measuredAtUtc": "2026-05-14",
+  "charsPerToken": 4,
+  "ilensVersion": "5",
+  "target": {
+    "assembly": "ICSharpCode.Decompiler.dll",
+    "version": "9.1.0.7988",
+    "fileSizeBytes": 2558464,
+    "publicTypeCount": 741
+  },
+  "ilspycmdVersion": "9.1.0.7988",
+  "baseline": {
+    "label": "full ilspycmd dump",
+    "chars": 4165901,
+    "tokensEstimated": 1041476
+  },
+  "rows": [
+    {
+      "task": "List the public types in a namespace",
+      "ilensTool": "list_types",
+      "ilensCall": "list_types(namespaceName: 'ICSharpCode.Decompiler.TypeSystem')",
+      "chars": 6845,
+      "tokensEstimated": 1712
+    },
+    {
+      "task": "See the API surface of one mid-sized class",
+      "ilensTool": "summarize_type",
+      "ilensCall": "summarize_type(typeName: 'ICSharpCode.Decompiler.CSharp.CSharpDecompiler')",
+      "chars": 3577,
+      "tokensEstimated": 895
+    },
+    {
+      "task": "Find which types expose a given method",
+      "ilensTool": "find_methods",
+      "ilensCall": "find_methods(namePattern: 'Decompile')",
+      "chars": 2471,
+      "tokensEstimated": 618
+    }
+  ]
+}

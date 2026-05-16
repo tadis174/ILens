@@ -1,6 +1,6 @@
 # Mono.Cecil MIT license
 
-`LICENSE` covers `Mono.Cecil`, the IL reading library that backs
+`mono-cecil-LICENSE` covers `Mono.Cecil`, the IL reading library that backs
 `ICSharpCode.Decompiler`.
 
 ## Provenance
@@ -17,5 +17,5 @@ When the `Mono.Cecil` version bumps (transitively, via `ICSharpCode.ILSpyX`):
 ```powershell
 Invoke-WebRequest `
   -Uri https://raw.githubusercontent.com/jbevain/cecil/<new-tag>/LICENSE.txt `
-  -OutFile LICENSE
+  -OutFile mono-cecil-LICENSE
 ```

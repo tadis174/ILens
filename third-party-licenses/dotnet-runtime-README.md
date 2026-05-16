@@ -1,9 +1,9 @@
 # .NET runtime third-party notices
 
-The bundled file `THIRD-PARTY-NOTICES.txt` covers non-Microsoft components
-that ship as part of the .NET runtime itself (ICU, LZMA SDK, zlib, and
-others). It is **not** the .NET Foundation MIT license — that's in
-`../dotnet-foundation/LICENSE` and covers Microsoft's own runtime code.
+The bundled file `dotnet-runtime-THIRD-PARTY-NOTICES.txt` covers non-Microsoft
+components that ship as part of the .NET runtime itself (ICU, LZMA SDK, zlib,
+and others). It is **not** the .NET Foundation MIT license — that's in
+`dotnet-foundation-LICENSE` and covers Microsoft's own runtime code.
 
 This file is needed because `Core/Core.csproj` sets `<SelfContained>true</SelfContained>`,
 which bundles the entire runtime into the published binary, including the
@@ -25,9 +25,9 @@ When `<TargetFramework>` is bumped, or when the SDK installs a newer
    ```powershell
    Invoke-WebRequest `
      -Uri https://raw.githubusercontent.com/dotnet/runtime/v<version>/THIRD-PARTY-NOTICES.TXT `
-     -OutFile THIRD-PARTY-NOTICES.txt
+     -OutFile dotnet-runtime-THIRD-PARTY-NOTICES.txt
    ```
 3. Update the `Source URL:` line and `Runtime version:` line above.
-4. Also update the dotnet-foundation tag URL in `../dotnet-foundation/README.md`
+4. Also update the dotnet-foundation tag URL in `dotnet-foundation-README.md`
    so it stays in sync with the runtime tag.
-5. Re-run `Core/Source/Attribution/check.ps1` to verify.
+5. Re-run `third-party-licenses/check.ps1` to verify.

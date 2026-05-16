@@ -8,7 +8,9 @@ public static class DecompileMethodTool
 {
     [McpServerTool(Name = "decompile_method", ReadOnly = true),
      Description("Decompile a single method to C# source code. " +
-        "Faster and more focused than decompile_type when you only need one method.")]
+        "Faster and more focused than decompile_type when you only need one method. " +
+        "Property and event accessors are resolvable by their IL name (get_X, set_X, add_X, remove_X) " +
+        "even though find_methods hides them from generic browsing.")]
     public static string DecompileMethod(
         AssemblyHostRegistry registry,
         [Description("Path to the .NET assembly to inspect (must be under an allowed root).")] string assembly,

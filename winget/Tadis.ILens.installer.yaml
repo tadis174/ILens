@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+
 # Winget installer manifest for ILens.
 # Forward-pointing: PackageVersion + InstallerUrl reflect the *next* release
 # (matching Core/Core.csproj <Version>). InstallerSha256 is left as 64 zeros at
@@ -6,7 +8,7 @@
 # Submission: see /publish skill Step 12 for the wingetcreate command.
 
 PackageIdentifier: Tadis.ILens
-PackageVersion: 5
+PackageVersion: 6
 InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
@@ -14,7 +16,7 @@ NestedInstallerFiles:
     PortableCommandAlias: ilens
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/tadis174/ILens/releases/download/v5/ILens-windows-x64.zip
+    InstallerUrl: https://github.com/tadis174/ILens/releases/download/v6/ILens-windows-x64.zip
     InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
 ReleaseDate: 2026-01-01
 ManifestType: installer

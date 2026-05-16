@@ -1,6 +1,6 @@
 # Model Context Protocol C# SDK attribution
 
-The vendored `LICENSE` is the comprehensive licensing document from
+The vendored `model-context-protocol-LICENSE` is the comprehensive licensing document from
 `modelcontextprotocol/csharp-sdk`. It includes the full Apache-2.0 license
 text, the full MIT license text, and a pointer to CC-BY-4.0 for documentation.
 
@@ -31,9 +31,9 @@ When the MCP SDK packages bump:
 ```powershell
 Invoke-WebRequest `
   -Uri https://raw.githubusercontent.com/modelcontextprotocol/csharp-sdk/v<version>/LICENSE `
-  -OutFile LICENSE
+  -OutFile model-context-protocol-LICENSE
 ```
 
 Update the `Source URL:` line above. If a `NOTICE` file appears upstream in a
-future version, vendor it as `NOTICE` next to `LICENSE` and remove the
-Apache §4(d) note from this README.
+future version, vendor it as `model-context-protocol-NOTICE` next to
+`model-context-protocol-LICENSE` and remove the Apache §4(d) note from this README.

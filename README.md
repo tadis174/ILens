@@ -6,7 +6,15 @@ An MCP server that lets AI agents inspect compiled .NET assemblies — list type
 
 The default fallback for an AI agent inspecting a compiled .NET assembly is to shell out to `ildasm` (IL dump) or `ilspycmd` (full-C# decompile). Both dump an entire file as text, and that output stays in the agent's context as input tokens on every subsequent turn — quickly thousands of tokens spent inspecting a single class.
 
-ILens turns assembly inspection into bounded, targeted lookups: list types in a namespace, summarize one type's public surface, find methods by name, decompile a single method body, run cross-reference analysis (callers, overrides, implementations, extension methods, attribute usage). Each call returns a focused response — typically 10² to 10³ tokens — making it cheap enough to leave registered as an always-available tool.
+| Task | `ilspycmd` cost | ILens tool | ILens cost |
+|------|----------------:|------------|-----------:|
+| List the public types in a namespace | 1,041,476 tokens | `list_types` | 1,712 tokens |
+| See the API surface of one mid-sized class | 1,041,476 tokens | `summarize_type` | 895 tokens |
+| Find which types expose a given method | 1,041,476 tokens | `find_methods` | 618 tokens |
+
+*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-05-14; token figures are character counts divided by 4, not a real tokenizer.*
+
+ILens turns assembly inspection into bounded, targeted lookups: list types in a namespace, summarize one type's public surface, find methods by name, decompile a single method body, run cross-reference analysis (callers, overrides, implementations, extension methods, attribute usage). Each call returns a focused response — making it cheap enough to leave registered as an always-available tool.
 
 ## Scope
 
@@ -24,36 +32,34 @@ To be clear: bug reports and feature requests about ILens belong on [the ILens i
 
 **System requirements**: Windows 10/11, x64. The binary is self-contained — no separate .NET runtime install required.
 
-### Recommended: PowerShell
+```
+winget install Tadis.ILens
+```
+
+Standard winget portable install. The binary lands under `%LOCALAPPDATA%\Microsoft\WinGet\Packages\` and `ilens` becomes available on your user PATH automatically. Update with `winget upgrade Tadis.ILens`; uninstall with `winget uninstall Tadis.ILens`.
+
+<details>
+<summary>Alternative install paths (no winget required)</summary>
+
+For machines where winget is unavailable, locked down by policy, or where you'd rather inspect the binary before granting it execution.
+
+**PowerShell one-liner.** Installs to `%LOCALAPPDATA%\Programs\ILens\` and adds that directory to your user PATH. No admin elevation needed.
 
 ```powershell
 irm https://raw.githubusercontent.com/tadis174/ILens/main/install.ps1 | iex
 ```
 
-Installs to `%LOCALAPPDATA%\Programs\ILens\` and adds it to your user PATH. No admin elevation needed.
-
-### Alternative: winget
-
-```
-winget install Tadis.ILens
-```
-
-ILens is currently pending Microsoft Store review. If `winget` does not find it yet, use the PowerShell one-liner above.
-
-### Updating
-
-- **Script-installed**: re-run the PowerShell one-liner.
-- **Winget-installed**: `winget upgrade Tadis.ILens`.
-
-### Uninstall
+Re-run the same one-liner to update; the script overwrites the install dir in place. To uninstall:
 
 ```powershell
 irm https://raw.githubusercontent.com/tadis174/ILens/main/uninstall.ps1 | iex
 ```
 
-For winget-installed copies: `winget uninstall Tadis.ILens`.
+**Manual ZIP.** Download `ILens-windows-x64.zip` from the [latest release](https://github.com/tadis174/ILens/releases/latest), extract anywhere, then either add the directory to your PATH or reference the binary by its full path in `.mcp.json`'s `command` field. No automatic update mechanism — re-download on each new release.
 
-See the [user guide](https://tadis174.github.io/ILens/guide.html) for manual ZIP installation (air-gapped environments, audit-first) and for troubleshooting.
+</details>
+
+See the [user guide](https://tadis174.github.io/ILens/guide.html) for troubleshooting.
 
 ## Setup
 
@@ -84,7 +90,7 @@ list_types(assembly="C:\\path\\to\\dlls\\MyApp.dll", namespaceName="MyApp.Models
 
 The `list_allowed_roots` tool surfaces the configured roots so the agent can discover what's reachable.
 
-> **Heads up**: Claude Code only registers MCP servers at session start. Editing `.mcp.json` inside a running session does not pick up the new server — start a new session.
+> **Heads up — a first install needs a full restart, not just a new session.** Windows captures `PATH` per-process at launch, so an already-running Claude app holds a stale environment whenever `ilens` is a brand-new entry on user PATH (true for a first-ever winget portable install, or any `install.ps1` run). Claude Code reads `.mcp.json` only at session start, so the new server isn't registered in any running session either. Recipe: close Claude app entirely → install ILens → relaunch Claude app → start a **new** Claude Code session in the relaunched app. Resumed sessions survive a Claude app restart and still hold the old environment, so they won't find `ilens`. Subsequent `winget upgrade Tadis.ILens` runs don't change PATH; they only need a fresh Claude Code session.
 
 ### Step 2: Tell Claude to use it
 

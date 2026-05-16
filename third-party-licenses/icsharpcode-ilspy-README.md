@@ -1,6 +1,6 @@
 # ICSharpCode (ILSpy) MIT license
 
-`LICENSE` covers `ICSharpCode.Decompiler` and `ICSharpCode.ILSpyX` — the
+`icsharpcode-ilspy-LICENSE` covers `ICSharpCode.Decompiler` and `ICSharpCode.ILSpyX` — the
 decompilation and analysis engines underlying ILens. Both packages ship from
 the same `icsharpcode/ILSpy` repository.
 
@@ -19,5 +19,5 @@ want, since a copyright-line update or relicense would matter.
 ```powershell
 Invoke-WebRequest `
   -Uri https://raw.githubusercontent.com/icsharpcode/ILSpy/master/LICENSE `
-  -OutFile LICENSE
+  -OutFile icsharpcode-ilspy-LICENSE
 ```

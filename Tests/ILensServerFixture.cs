@@ -48,8 +48,11 @@ public sealed class ILensServerFixture : IAsyncLifetime
     /// Resolves the ILens executable to drive. <c>run-test.ps1</c> sets
     /// <c>ILENS_E2E_EXE</c>; absent that (a bare <c>dotnet test</c>), falls back to
     /// the most recent <c>ILens.exe</c> under the Core project's build output.
+    /// Exposed publicly so tests that need a custom-configured second server
+    /// (e.g. with <c>--max-total-size</c>) can spawn one without duplicating
+    /// this lookup logic.
     /// </summary>
-    private static string ResolveILensExecutable()
+    public static string ResolveILensExecutable()
     {
         string? fromEnv = Environment.GetEnvironmentVariable("ILENS_E2E_EXE");
         if (!string.IsNullOrWhiteSpace(fromEnv))

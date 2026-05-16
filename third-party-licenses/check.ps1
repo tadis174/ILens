@@ -1,9 +1,9 @@
 # Attribution gate. Runs as part of /publish pre-flight (Step 1).
 #
-# Verifies that vendored third-party attribution under Core/Source/Attribution/
+# Verifies that vendored third-party attribution under third-party-licenses/
 # matches the build's actual dependencies and supporting files. Format
 # conventions for INDEX.md and per-source READMEs are documented in
-# Core/Source/Attribution/README.md.
+# third-party-licenses/README.md.
 #
 # Checks:
 #   1. Completeness            — every package in project.assets.json is in INDEX
@@ -26,7 +26,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $attributionDir = $PSScriptRoot
-$repoRoot       = (Resolve-Path (Join-Path $attributionDir '..\..\..')).Path
+$repoRoot       = (Resolve-Path (Join-Path $attributionDir '..')).Path
 $indexPath      = Join-Path $attributionDir 'INDEX.md'
 $assetsPath     = Join-Path $repoRoot 'Build\obj\Core\project.assets.json'
 
@@ -35,7 +35,7 @@ if (-not (Test-Path $assetsPath)) {
     exit 2
 }
 if (-not (Test-Path $indexPath)) {
-    Write-Host "[SETUP] Core/Source/Attribution/INDEX.md not found."
+    Write-Host "[SETUP] third-party-licenses/INDEX.md not found."
     exit 2
 }
 
@@ -201,9 +201,7 @@ foreach ($srcName in $sources.Keys) {
         continue
     }
     if ($s.License -match '^(.+?)-(LICENSE|NOTICE|THIRD-PARTY-NOTICES\.txt)$') {
-        $sourceDir  = $matches[1]
-        $sourceFile = $matches[2]
-        $expected   = Join-Path $attributionDir "$sourceDir\$sourceFile"
+        $expected = Join-Path $attributionDir $s.License
         if (-not (Test-Path $expected)) {
             $missingLicenseFiles += "INDEX names ``$($s.License)`` for source '$srcName' but $expected does not exist"
         }
@@ -219,7 +217,7 @@ foreach ($srcName in $sources.Keys) {
     $s = $sources[$srcName]
     $isApache = ($srcName -match 'Apache') -or ($s.License -and $s.License -match 'Apache')
     if (-not $isApache -and $s.License -and $s.License -match '^(.+?)-(LICENSE|NOTICE)$') {
-        $licPath = Join-Path $attributionDir "$($matches[1])\$($matches[2])"
+        $licPath = Join-Path $attributionDir $s.License
         if (Test-Path $licPath) {
             $head = (Get-Content $licPath -TotalCount 50) -join "`n"
             if ($head -match 'Apache License') { $isApache = $true }
@@ -227,18 +225,18 @@ foreach ($srcName in $sources.Keys) {
     }
     if (-not $isApache) { continue }
     if ($s.License -notmatch '^(.+?)-(LICENSE|NOTICE)$') { continue }
-    $sourceDir  = $matches[1]
-    $noticeFile = Join-Path $attributionDir "$sourceDir\NOTICE"
-    $readmeFile = Join-Path $attributionDir "$sourceDir\README.md"
+    $sourceName = $matches[1]
+    $noticeFile = Join-Path $attributionDir "$sourceName-NOTICE"
+    $readmeFile = Join-Path $attributionDir "$sourceName-README.md"
     if ((Test-Path $noticeFile) -or (Test-Path $readmeFile)) { continue }
     $apacheIssues += "Source '$srcName' is Apache-licensed but has no NOTICE file and no README.md documenting absence (Apache-2.0 §4(d))"
 }
 
 # === Check 5: Runtime version match ===
 $runtimeIssues  = @()
-$runtimeReadme  = Join-Path $attributionDir 'dotnet-runtime\README.md'
+$runtimeReadme  = Join-Path $attributionDir 'dotnet-runtime-README.md'
 if (-not (Test-Path $runtimeReadme)) {
-    $runtimeIssues += "Core/Source/Attribution/dotnet-runtime/README.md missing — cannot verify runtime version"
+    $runtimeIssues += "third-party-licenses/dotnet-runtime-README.md missing — cannot verify runtime version"
 }
 else {
     $readmeText = Get-Content $runtimeReadme -Raw
@@ -257,7 +255,7 @@ else {
                 $runtimeIssues += "No Microsoft.NETCore.App $major.x runtime installed — cannot verify version match"
             }
             elseif ($installedMatch -ne $vendoredVersion) {
-                $runtimeIssues += "Runtime notices vendored for $vendoredVersion but installed runtime is $installedMatch — refresh dotnet-runtime/THIRD-PARTY-NOTICES.txt and update dotnet-runtime/README.md"
+                $runtimeIssues += "Runtime notices vendored for $vendoredVersion but installed runtime is $installedMatch — refresh dotnet-runtime-THIRD-PARTY-NOTICES.txt and update dotnet-runtime-README.md"
             }
         }
         catch {
@@ -275,24 +273,25 @@ else {
 $driftIssues = @()
 $driftFetchCount = 0
 if (-not $Offline) {
-    foreach ($srcDir in (Get-ChildItem $attributionDir -Directory)) {
-        $readme = Join-Path $srcDir.FullName 'README.md'
-        if (-not (Test-Path $readme)) { continue }
+    foreach ($readme in (Get-ChildItem $attributionDir -File)) {
+        if ($readme.Name -notmatch '^(.+)-README\.md$') { continue }
+        $sourceName = $matches[1]
         $urls = @()
-        foreach ($line in (Get-Content $readme)) {
+        foreach ($line in (Get-Content $readme.FullName)) {
             if ($line -match '^-\s+Source URL:\s*(\S+)\s*$') {
                 $urls += $matches[1]
             }
         }
         if ($urls.Count -eq 0) {
-            $driftIssues += "$($srcDir.Name): README.md has no '- Source URL: <url>' line — cannot drift-check"
+            $driftIssues += "${sourceName}: $($readme.Name) has no '- Source URL: <url>' line — cannot drift-check"
             continue
         }
         foreach ($url in $urls) {
-            $localName = Get-VendoredLocalFilename $url
-            $localPath = Join-Path $srcDir.FullName $localName
+            $kind      = Get-VendoredLocalFilename $url
+            $localName = "$sourceName-$kind"
+            $localPath = Join-Path $attributionDir $localName
             if (-not (Test-Path $localPath)) {
-                $driftIssues += "$($srcDir.Name): README declares Source URL $url which maps to local file $localName, but $localPath does not exist"
+                $driftIssues += "${sourceName}: $($readme.Name) declares Source URL $url which maps to local file $localName, but $localPath does not exist"
                 continue
             }
             try {
@@ -303,12 +302,12 @@ if (-not $Offline) {
                 }
             }
             catch {
-                $driftIssues += "$($srcDir.Name): failed to fetch $url — $($_.Exception.Message)"
+                $driftIssues += "${sourceName}: failed to fetch $url — $($_.Exception.Message)"
                 continue
             }
             $vendoredText = Get-Content $localPath -Raw
             if ((Normalize-Text $upstreamText) -ne (Normalize-Text $vendoredText)) {
-                $driftIssues += "$($srcDir.Name): vendored ``$localName`` differs from upstream $url — refresh the file (and bump the version in README if the upstream version changed)"
+                $driftIssues += "${sourceName}: vendored ``$localName`` differs from upstream $url — refresh the file (and bump the version in $($readme.Name) if the upstream version changed)"
             }
             $driftFetchCount++
         }

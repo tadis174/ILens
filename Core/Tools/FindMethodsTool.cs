@@ -20,6 +20,7 @@ public static class FindMethodsTool
         "Arrays are matched with '[]' suffix (e.g., 'int[]', 'String[]'). " +
         "Matching is exact (no inheritance walk); use analyze with UsedBy/Uses for assignability-aware exploration. " +
         "Constructors and property/event accessors are excluded; operator methods (op_*) are included. " +
+        "To decompile an accessor body, call decompile_method with the accessor's IL name (get_X, set_X, add_X, remove_X). " +
         "Results are sorted by declaring type, then method name; capped at limit (default 50).")]
     public static string FindMethods(
         AssemblyHostRegistry registry,

@@ -1,6 +1,6 @@
 # K4os.Compression.LZ4 MIT license
 
-`LICENSE` covers `K4os.Compression.LZ4`, an LZ4 implementation by Milosz
+`k4os-lz4-LICENSE` covers `K4os.Compression.LZ4`, an LZ4 implementation by Milosz
 Krajewski. Pulled in transitively via `ICSharpCode.ILSpyX` for handling
 LZ4-compressed sections in .NET assembly metadata.
 
@@ -18,5 +18,5 @@ change, which is the signal we want.
 ```powershell
 Invoke-WebRequest `
   -Uri https://raw.githubusercontent.com/MiloszKrajewski/K4os.Compression.LZ4/master/LICENSE `
-  -OutFile LICENSE
+  -OutFile k4os-lz4-LICENSE
 ```

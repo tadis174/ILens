@@ -1,8 +1,9 @@
 # Third-party attribution
 
 This directory holds vendored license files and notices for every third-party
-component bundled in an ILens release. Files here are copied into
-`Build/dist/third-party-licenses/` at publish time and end up in the release ZIP.
+component bundled in an ILens release, plus the docs and tooling that maintain
+them. See Layout below for what ships in the release ZIP and what stays in the
+repo.
 
 ## Per-source pattern
 
@@ -13,11 +14,18 @@ mapping in `INDEX.md`. Same legal coverage, no duplication. (The exact package
 count varies as deps shift; `check.ps1`'s success message reports the current
 total.)
 
-Layout:
+Layout (flat — the repo-root tree and the ZIP's `third-party-licenses/` are
+structurally identical for licensing content):
 
-- `<source>/LICENSE` — vendored license text from the upstream repo
-- `<source>/NOTICE` — present only if upstream has one (Apache-2.0 §4(d))
-- `<source>/README.md` — provenance and refresh procedure for the vendored files
+- `<source>-LICENSE` — vendored license text from the upstream repo
+- `<source>-NOTICE` — present only if upstream has one (Apache-2.0 §4(d))
+- `<source>-README.md` — provenance and refresh procedure for the vendored files (repo only; never shipped)
+
+The repo-root `third-party-licenses/` is the canonical source of truth. The publish
+flow copies the shippable subset (`INDEX.md` plus every `*-LICENSE` / `*-NOTICE` /
+`*-THIRD-PARTY-NOTICES.txt`) into `Build/dist/third-party-licenses/` byte-for-byte.
+The per-source `*-README.md` files, `check.ps1`, `check-staged.ps1`, and
+`staged-allowlist.txt` stay in the repo and are not part of the release artifact.
 
 For sources with the .NET Foundation MIT license (`dotnet/runtime`,
 `dotnet/extensions`, `dotnet/maintenance-packages`), one vendored LICENSE
@@ -48,13 +56,14 @@ the parser depends on — do not break them when editing:
 - Other top-level bullets (`- Notes:`, etc.) are ignored by the parser
   but useful for human readers.
 
-The source ID for the LICENSE-files-present check is derived from the License
-filename: `dotnet-foundation-LICENSE` → expects `dotnet-foundation/LICENSE`
-in this directory.
+The License filename names the file directly: `dotnet-foundation-LICENSE` is the
+on-disk name in this directory. The source ID (`dotnet-foundation`) is the prefix
+before `-LICENSE` / `-NOTICE` / `-THIRD-PARTY-NOTICES.txt`; the gate uses it to
+locate the matching `<source>-README.md` and `<source>-NOTICE` (if any).
 
 ## Per-source README format
 
-Each `<source>/README.md` documents provenance for the vendored files. The gate's
+Each `<source>-README.md` documents provenance for the vendored files. The gate's
 upstream-drift check reads one specific bullet:
 
 - `- Source URL: <https-url>` — the canonical raw URL to fetch from upstream.
@@ -67,7 +76,7 @@ upstream-drift check reads one specific bullet:
 Multiple `- Source URL:` lines per README are allowed for sources that vendor
 more than one upstream file. Each URL must map to a distinct local filename.
 
-The `dotnet-runtime/README.md` additionally needs a `Runtime version: <X.Y.Z>`
+The `dotnet-runtime-README.md` additionally needs a `Runtime version: <X.Y.Z>`
 line — the gate checks this matches the highest installed `Microsoft.NETCore.App 10.x`.
 
 ## Pre-publish gate (`check.ps1`)
@@ -80,12 +89,12 @@ Runs as part of `/publish` Step 1. Seven checks; all must pass.
    name or by a matching wildcard.
 2. **No stale entries** — every explicit (non-wildcard) entry in `INDEX.md`
    is still present in the build.
-3. **LICENSE files present** — every source in `INDEX.md` has its
-   `<source>/LICENSE` (or NOTICE / THIRD-PARTY-NOTICES.txt) file on disk.
+3. **LICENSE files present** — every source in `INDEX.md` has its on-disk file
+   (`<source>-LICENSE`, or `<source>-NOTICE` / `<source>-THIRD-PARTY-NOTICES.txt`).
 4. **Apache NOTICE accountability** — every Apache-licensed source has either
    a `NOTICE` file or a `README.md` that documents its absence (Apache-2.0 §4(d)).
 5. **Runtime version match** — the .NET runtime version named in
-   `dotnet-runtime/README.md` matches the highest installed 10.x runtime the
+   `dotnet-runtime-README.md` matches the highest installed 10.x runtime the
    SDK will bundle.
 6. **Upstream drift** *(network)* — for every per-source `README.md`, fetches
    each `Source URL:` and compares byte-for-byte against the vendored file.
@@ -99,8 +108,8 @@ Runs as part of `/publish` Step 1. Seven checks; all must pass.
 Run manually:
 
 ```powershell
-pwsh Core/Source/Attribution/check.ps1            # all seven checks
-pwsh Core/Source/Attribution/check.ps1 -Offline   # skip drift; useful with no network
+pwsh third-party-licenses/check.ps1            # all seven checks
+pwsh third-party-licenses/check.ps1 -Offline   # skip drift; useful with no network
 ```
 
 Exits 0 on success, 1 on attribution drift, 2 if `dotnet restore` hasn't run.
@@ -122,7 +131,7 @@ trimmer left behind, stale files from a prior staging run that didn't get wiped.
 Run manually:
 
 ```powershell
-pwsh Core/Source/Attribution/check-staged.ps1
+pwsh third-party-licenses/check-staged.ps1
 ```
 
 Exits 0 on success, 1 on unexpected/missing files, 2 if `Build/dist/` hasn't
@@ -135,11 +144,11 @@ package's source repo, etc.), the workflow is:
 
 1. `dotnet restore` to refresh `Build/obj/Core/project.assets.json`.
 2. Run `check.ps1` — it tells you what's missing or stale.
-3. For a new source: create `Core/Source/Attribution/<source>/`, vendor the upstream
-   LICENSE (and NOTICE if applicable), write `README.md` with the `Source URL:`
-   line, add a section to `INDEX.md`.
-4. For a removed source: delete its directory and its INDEX section.
-5. For a runtime bump: update `dotnet-runtime/README.md` (`Runtime version:` line
-   and `Source URL:` tag) and refetch `THIRD-PARTY-NOTICES.txt`. Then update
-   `dotnet-foundation/README.md` to keep the LICENSE tag URL in sync.
+3. For a new source: vendor the upstream LICENSE (and NOTICE if applicable) as
+   `third-party-licenses/<source>-LICENSE` (and `<source>-NOTICE`), write
+   `<source>-README.md` with the `Source URL:` line, add a section to `INDEX.md`.
+4. For a removed source: delete its `<source>-*` files and its INDEX section.
+5. For a runtime bump: update `dotnet-runtime-README.md` (`Runtime version:` line
+   and `Source URL:` tag) and refetch `dotnet-runtime-THIRD-PARTY-NOTICES.txt`. Then
+   update `dotnet-foundation-README.md` to keep the LICENSE tag URL in sync.
 6. Re-run `check.ps1` until it exits 0.

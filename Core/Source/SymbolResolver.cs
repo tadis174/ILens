@@ -192,7 +192,57 @@ public sealed class SymbolResolver
             return (method, MemberOrigin.ExtensionOn(method.DeclaringType.FullName));
         }
 
+        // 4. Accessor-name fallback. find_methods hides accessors so generic browsing
+        // isn't noisy with compiler-generated members; this fallback is the direct
+        // route back to a known accessor body. Disambiguation hints don't apply —
+        // accessors are unique per property/event.
+        var (prefix, baseName) = SplitAccessorPrefix(methodName);
+        if (prefix is "get_" or "set_")
+        {
+            var found = TryFindProperty(type, baseName);
+            if (found.HasValue)
+            {
+                var (property, origin) = found.Value;
+                var accessor = prefix == "get_" ? property.Getter : property.Setter;
+                if (accessor != null)
+                    return (accessor, origin);
+                throw new ArgumentException(
+                    $"Property '{baseName}' on {property.DeclaringType.FullName} has no " +
+                    $"{(prefix == "get_" ? "getter" : "setter")}.");
+            }
+        }
+        else if (prefix is "add_" or "remove_")
+        {
+            var found = TryFindEvent(type, baseName);
+            if (found.HasValue)
+            {
+                var (evt, origin) = found.Value;
+                var accessor = prefix == "add_" ? evt.AddAccessor : evt.RemoveAccessor;
+                if (accessor != null)
+                    return (accessor, origin);
+                throw new ArgumentException(
+                    $"Event '{baseName}' on {evt.DeclaringType.FullName} has no " +
+                    $"{(prefix == "add_" ? "add" : "remove")} accessor.");
+            }
+        }
+
         return null;
+    }
+
+    /// <summary>
+    /// Split an IL accessor name into its prefix and the property/event name. Returns
+    /// <c>(null, name)</c> if the name doesn't begin with one of the four C#-emitted
+    /// accessor prefixes (<c>get_</c>, <c>set_</c>, <c>add_</c>, <c>remove_</c>).
+    /// </summary>
+    private static (string Prefix, string BaseName) SplitAccessorPrefix(string methodName)
+    {
+        foreach (var prefix in new[] { "get_", "set_", "add_", "remove_" })
+        {
+            if (methodName.Length > prefix.Length &&
+                methodName.StartsWith(prefix, StringComparison.Ordinal))
+                return (prefix, methodName.Substring(prefix.Length));
+        }
+        return (null, methodName);
     }
 
     /// <summary>

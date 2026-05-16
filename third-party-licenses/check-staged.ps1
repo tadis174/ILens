@@ -11,7 +11,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$repoRoot       = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$repoRoot       = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $attributionDir = $PSScriptRoot
 $indexPath      = Join-Path $attributionDir 'INDEX.md'
 $allowlistPath  = Join-Path $attributionDir 'staged-allowlist.txt'
@@ -27,11 +27,11 @@ if (-not (Test-Path $tplDir)) {
     exit 2
 }
 if (-not (Test-Path $indexPath)) {
-    Write-Host "[SETUP] Core/Source/Attribution/INDEX.md not found."
+    Write-Host "[SETUP] third-party-licenses/INDEX.md not found."
     exit 2
 }
 if (-not (Test-Path $allowlistPath)) {
-    Write-Host "[SETUP] Core/Source/Attribution/staged-allowlist.txt not found."
+    Write-Host "[SETUP] third-party-licenses/staged-allowlist.txt not found."
     exit 2
 }
 

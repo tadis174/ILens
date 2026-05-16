@@ -1,6 +1,6 @@
 # .NET Foundation MIT license
 
-`LICENSE` is the canonical .NET Foundation MIT license. It covers every NuGet
+`dotnet-foundation-LICENSE` is the canonical .NET Foundation MIT license. It covers every NuGet
 package shipped under the .NET Foundation umbrella — `Microsoft.Extensions.*`,
 `System.*`, and a few satellite packages (e.g. `Microsoft.Extensions.AI.*` from
 `dotnet/extensions`, `System.Runtime.CompilerServices.Unsafe` from
@@ -18,11 +18,11 @@ tag-specific URL keeps drift detection deterministic.
 
 ## Refresh procedure
 
-When the bundled .NET runtime version changes (see `../dotnet-runtime/README.md`),
+When the bundled .NET runtime version changes (see `dotnet-runtime-README.md`),
 update the tag in the URL above and refetch:
 
 ```powershell
 Invoke-WebRequest `
   -Uri https://raw.githubusercontent.com/dotnet/runtime/v<new-version>/LICENSE.TXT `
-  -OutFile LICENSE
+  -OutFile dotnet-foundation-LICENSE
 ```

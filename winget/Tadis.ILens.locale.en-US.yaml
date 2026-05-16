@@ -1,9 +1,11 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+
 # Winget default-locale manifest for ILens (en-US).
 # PackageVersion tracks Core/Core.csproj <Version> (forward-pointing).
 # Other fields are largely static; bump only when publisher metadata changes.
 
 PackageIdentifier: Tadis.ILens
-PackageVersion: 5
+PackageVersion: 6
 PackageLocale: en-US
 Publisher: Tadis
 PublisherUrl: https://github.com/tadis174

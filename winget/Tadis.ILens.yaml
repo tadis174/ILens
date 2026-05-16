@@ -1,9 +1,11 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.10.0.schema.json
+
 # Winget version manifest for ILens.
 # Top-level stub linking the installer and locale manifests.
 # PackageVersion tracks Core/Core.csproj <Version> (forward-pointing).
 
 PackageIdentifier: Tadis.ILens
-PackageVersion: 5
+PackageVersion: 6
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.10.0
