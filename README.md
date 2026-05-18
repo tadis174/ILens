@@ -12,13 +12,13 @@ The default fallback for an AI agent inspecting a compiled .NET assembly is to s
 | See the API surface of one mid-sized class | 1,041,476 tokens | `summarize_type` | 895 tokens |
 | Find which types expose a given method | 1,041,476 tokens | `find_methods` | 618 tokens |
 
-*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-05-14; token figures are character counts divided by 4, not a real tokenizer.*
+*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-05-18; token figures are character counts divided by 4, not a real tokenizer.*
 
 ILens turns assembly inspection into bounded, targeted lookups: list types in a namespace, summarize one type's public surface, find methods by name, decompile a single method body, run cross-reference analysis (callers, overrides, implementations, extension methods, attribute usage). Each call returns a focused response — making it cheap enough to leave registered as an always-available tool.
 
 ## Scope
 
-ILens is built for inspecting **C# assemblies**, and its output is C#. The metadata-driven tools (`list_types`, `search_types`, `list_members`, `find_methods`, `analyze`) read language-agnostic metadata and work on an assembly from any .NET language. The decompiling tools (`decompile_type`, `decompile_method`, `summarize_type`) always emit C# — for an assembly compiled from F#, VB.NET, or C++/CLI they still run, but constructs without a C# equivalent may render unfaithfully.
+ILens is built for inspecting **C# assemblies**, and its output is C#. The metadata-driven tools (`list_types`, `search_types`, `list_members`, `find_methods`, `analyze`) read language-agnostic metadata and work on an assembly from any .NET language. The decompiling tools (`decompile_type`, `decompile_method`, `decompile_property`, `decompile_event`, `summarize_type`) always emit C# — for an assembly compiled from F#, VB.NET, or C++/CLI they still run, but constructs without a C# equivalent may render unfaithfully.
 
 ## Built on ILSpy
 
@@ -32,34 +32,13 @@ To be clear: bug reports and feature requests about ILens belong on [the ILens i
 
 **System requirements**: Windows 10/11, x64. The binary is self-contained — no separate .NET runtime install required.
 
-```
+```powershell
 winget install Tadis.ILens
 ```
 
-Standard winget portable install. The binary lands under `%LOCALAPPDATA%\Microsoft\WinGet\Packages\` and `ilens` becomes available on your user PATH automatically. Update with `winget upgrade Tadis.ILens`; uninstall with `winget uninstall Tadis.ILens`.
+Standard winget portable install. The binary lands under `%LOCALAPPDATA%\Microsoft\WinGet\Packages\` and `ilens` becomes available on your user PATH automatically. No admin elevation needed.
 
-<details>
-<summary>Alternative install paths (no winget required)</summary>
-
-For machines where winget is unavailable, locked down by policy, or where you'd rather inspect the binary before granting it execution.
-
-**PowerShell one-liner.** Installs to `%LOCALAPPDATA%\Programs\ILens\` and adds that directory to your user PATH. No admin elevation needed.
-
-```powershell
-irm https://raw.githubusercontent.com/tadis174/ILens/main/install.ps1 | iex
-```
-
-Re-run the same one-liner to update; the script overwrites the install dir in place. To uninstall:
-
-```powershell
-irm https://raw.githubusercontent.com/tadis174/ILens/main/uninstall.ps1 | iex
-```
-
-**Manual ZIP.** Download `ILens-windows-x64.zip` from the [latest release](https://github.com/tadis174/ILens/releases/latest), extract anywhere, then either add the directory to your PATH or reference the binary by its full path in `.mcp.json`'s `command` field. No automatic update mechanism — re-download on each new release.
-
-</details>
-
-See the [user guide](https://tadis174.github.io/ILens/guide.html) for troubleshooting.
+See the [user guide](https://tadis174.github.io/ILens/guide.html) for alternative installers, updating, and installation troubleshooting.
 
 ## Setup
 
@@ -107,7 +86,8 @@ files directly, or web-searching for source.
   `find_methods` (signature search).
 - Reading: `summarize_type` (public surface, no bodies), `list_members`
   (filtered surface), `decompile_type` (full C#), `decompile_method` (single
-  method body).
+  method body), `decompile_property` / `decompile_event` (full property or
+  event declaration with accessor bodies, by unprefixed name).
 - Cross-references: `analyze` with `kind` set to one of `UsedBy`,
   `InstantiatedBy`, `ExposedBy`, `ExtensionMethods`, `AppliedTo`,
   `OverriddenBy`, `ImplementedBy`, `Uses`, `Implements`, `ReadBy`,
@@ -118,7 +98,7 @@ files directly, or web-searching for source.
 
 - The first paragraph is the load-bearing prefer-MCP rule. Without it, models default to `Bash`.
 - The discovery bullet routes "I don't know the full name" tasks to the right tool: a partial name goes to `search_types`, a known namespace goes to `list_types`, a method shape goes to `find_methods`.
-- The reading bullet escalates from cheapest to most expensive: `summarize_type` first, `list_members` when only part of the surface is needed, `decompile_method` for one method body, `decompile_type` only when full source is required.
+- The reading bullet escalates from cheapest to most expensive: `summarize_type` first, `list_members` when only part of the surface is needed, `decompile_method` for one method body (or `decompile_property` / `decompile_event` for the whole property or event without having to know the IL accessor prefix), `decompile_type` only when full source is required.
 - The `analyze` bullet enumerates the `kind` enum so the model picks values the schema accepts — using one that does not apply to the symbol category produces an error like `Analysis kind 'ReadBy' is not valid for Method`.
 
 ## Full reference

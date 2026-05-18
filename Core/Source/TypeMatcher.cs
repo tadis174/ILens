@@ -11,11 +11,14 @@ namespace ILens;
 public static class TypeMatcher
 {
     /// <summary>
-    /// Match a type against a pattern. Generic-erasing — <c>List</c> matches any
-    /// <c>List&lt;T&gt;</c>. Arrays matched via trailing <c>[]</c>. <c>Nullable&lt;T&gt;</c>
-    /// is unwrapped so <c>int</c> matches <c>int?</c>. <c>ref</c>/<c>out</c>/<c>in</c>
-    /// surface as <see cref="ByReferenceType"/> and are peeled before any other shape
-    /// check, so <c>int[]</c> matches <c>ref int[]</c>.
+    /// Match a type against a pattern. Accepts the type's short name (<c>Boolean</c>),
+    /// full name (<c>System.Boolean</c>), or — for the well-known framework types —
+    /// its C# keyword (<c>bool</c>) the way <see cref="ReferenceFormatter.FormatTypeRef"/>
+    /// renders it. Generic-erasing — <c>List</c> matches any <c>List&lt;T&gt;</c>.
+    /// Arrays matched via trailing <c>[]</c>. <c>Nullable&lt;T&gt;</c> is unwrapped
+    /// so <c>int</c> matches <c>int?</c>. <c>ref</c>/<c>out</c>/<c>in</c> surface as
+    /// <see cref="ByReferenceType"/> and are peeled before any other shape check,
+    /// so <c>int[]</c> matches <c>ref int[]</c>.
     /// </summary>
     public static bool Matches(IType type, string pattern)
     {
@@ -45,6 +48,8 @@ public static class TypeMatcher
         // Generic-erasing: List<int> matches by GenericType ('List')
         if (target is ParameterizedType pt) target = pt.GenericType;
 
-        return target.Name == pattern || target.FullName == pattern;
+        return target.Name == pattern
+            || target.FullName == pattern
+            || ReferenceFormatter.TypeKeyword(target) == pattern;
     }
 }

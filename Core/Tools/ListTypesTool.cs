@@ -21,7 +21,7 @@ public static class ListTypesTool
             .ToList();
 
         if (types.Count == 0)
-            return $"No types found in namespace '{namespaceName}'";
+            return $"No types in namespace '{namespaceName}'";
 
         return $"{types.Count} types:\n{string.Join("\n", types)}";
     }

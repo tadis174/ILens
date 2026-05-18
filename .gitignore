@@ -5,3 +5,5 @@ Build/doc/*
 .vs/
 CLAUDE.md
 .claude/
+.mcp.json
+manifests/

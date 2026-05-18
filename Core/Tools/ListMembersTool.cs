@@ -46,7 +46,7 @@ public static class ListMembersTool
 
         var totalAvailable = methods.Count + properties.Count + fields.Count + events.Count;
         if (totalAvailable == 0)
-            return $"{type.FullName}: no members match the filter.";
+            return $"No members on {type.FullName} match the filter";
 
         var cap = limit ?? DefaultLimit;
         var sb = new StringBuilder();

@@ -36,7 +36,20 @@ while (-not $downloaded -and $attempt -lt $maxAttempts) {
     }
 }
 
-# 2. Wipe existing install (overwrite-in-place upgrade).
+# 2. Stop any running ILens processes so the existing install can be overwritten.
+#    A running 'ILens.exe' holds an exclusive lock on its own image — Windows
+#    refuses to delete or replace the file while any instance is loaded. The
+#    typical holders are MCP server processes spawned by AI clients (Claude
+#    Code sessions, Claude Desktop) that registered ILens.
+if (Test-Path $installDir) {
+    $running = @(Get-Process ILens -ErrorAction SilentlyContinue)
+    if ($running.Count -gt 0) {
+        Write-Step "Stopping $($running.Count) running ILens process(es)"
+        $running | Stop-Process -Force
+    }
+}
+
+# 3. Wipe existing install (overwrite-in-place upgrade).
 if (Test-Path $installDir) {
     Write-Step "Removing existing install at $installDir"
     try {
@@ -44,13 +57,13 @@ if (Test-Path $installDir) {
     } catch {
         throw @"
 Could not remove existing install at ${installDir}: $($_.Exception.Message)
-A running 'ilens.exe' process may be holding files open. Close any MCP client
-sessions that loaded ILens (Claude Code, etc.) and re-run the installer.
+A file in that directory is still in use. Close any process holding it open
+(file explorer window, editor, antivirus scan, MCP client session) and re-run.
 "@
     }
 }
 
-# 3. Extract the ZIP. Wrap so the temp file always gets cleaned up.
+# 4. Extract the ZIP. Wrap so the temp file always gets cleaned up.
 Write-Step "Extracting to $installDir"
 try {
     New-Item -Path $installDir -ItemType Directory -Force | Out-Null
@@ -63,7 +76,7 @@ try {
     }
 }
 
-# 4. Verify the binary landed. Missing here usually means antivirus quarantined it.
+# 5. Verify the binary landed. Missing here usually means antivirus quarantined it.
 $binaryPath = Join-Path $installDir 'ILens.exe'
 if (-not (Test-Path $binaryPath)) {
     throw @"
@@ -80,7 +93,7 @@ See the troubleshooting section of the user guide: $guideUrl
 "@
 }
 
-# 5. Run the binary to confirm it executes and capture the version.
+# 6. Run the binary to confirm it executes and capture the version.
 Write-Step "Verifying binary"
 $versionOutput = & $binaryPath --version 2>&1
 if ($LASTEXITCODE -ne 0) {
@@ -95,7 +108,7 @@ re-run the installer.
 }
 $version = ($versionOutput | Select-Object -First 1 | Out-String).Trim()
 
-# 6. Add install dir to user-level PATH if not already present.
+# 7. Add install dir to user-level PATH if not already present.
 $pathChanged = $false
 $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
 if ($null -eq $userPath) { $userPath = '' }
@@ -109,7 +122,7 @@ if ($pathEntries -notcontains $installDir) {
     Write-Host "User PATH already contains $installDir; no change."
 }
 
-# 7. Success block.
+# 8. Success block.
 Write-Host ''
 Write-Success "Installed $version to $installDir"
 if ($pathChanged) {

@@ -4,9 +4,10 @@
 # user guide's "Why ILens" comparison table, so the table shows measured
 # figures instead of estimates.
 #
-# Run this on demand, not on every /doc run. The artifact is committed; the
-# numbers only need refreshing when the measured assembly
-# (ICSharpCode.Decompiler.dll) is bumped or ILens's tool output changes.
+# Invoked automatically by /doc in stats-consuming modes (--user, --readme,
+# and no-arg), so the bundled docs always ship with a current measurement
+# timestamp. /doc --dev skips it (the dev guide doesn't carry the table).
+# Can still be run by hand for ad-hoc re-measurement — the artifact is committed.
 #
 # Modes:
 #   (no args)          Inner loop: build Core (Release) and measure that build

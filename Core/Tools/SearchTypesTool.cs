@@ -27,7 +27,7 @@ public static class SearchTypesTool
             .ToList();
 
         if (matches.Count == 0)
-            return $"No types matching '{pattern}'";
+            return $"No types match '{pattern}'";
 
         var truncated = matches.Count > MaxResults;
         var results = matches.Take(MaxResults).Select(t => t.FullName);

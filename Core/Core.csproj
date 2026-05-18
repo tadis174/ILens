@@ -5,7 +5,7 @@
     <AssemblyName>ILens</AssemblyName>
     <RootNamespace>ILens</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>6</Version>
+    <Version>7</Version>
     <!-- This project lives in Core/. Repo-root-relative paths in the release
          flow below resolve against $(_RepoRoot), not $(MSBuildThisFileDirectory). -->
     <_RepoRoot>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)..'))</_RepoRoot>

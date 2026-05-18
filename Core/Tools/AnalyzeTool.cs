@@ -13,12 +13,13 @@ public static class AnalyzeTool
      Description("Run cross-reference analysis on a type or member. " +
         "Omit memberName to analyze the type itself.\n" +
         "Valid kinds by symbol category:\n" +
-        "  Type:     UsedBy, InstantiatedBy, ExposedBy, ExtensionMethods, AppliedTo\n" +
+        "  Type:     UsedBy, InstantiatedBy, ExposedBy, ExtensionMethods, AppliedTo, ImplementedBy\n" +
         "  Method:   UsedBy, OverriddenBy, ImplementedBy, Uses, Implements\n" +
         "  Property: OverriddenBy, ImplementedBy\n" +
         "  Field:    ReadBy, AssignedBy\n" +
         "  Event:    OverriddenBy, ImplementedBy\n" +
-        "AppliedTo requires an Attribute-derived type — it errors on a non-attribute type.")]
+        "AppliedTo requires an Attribute-derived type — it errors on a non-attribute type. " +
+        "ImplementedBy on a type requires an interface — it errors on a non-interface type.")]
     public static string Analyze(
         AssemblyHostRegistry registry,
         [Description("Path to the .NET assembly to inspect (must be under an allowed root).")] string assembly,
@@ -60,8 +61,22 @@ public static class AnalyzeTool
                 $"Analysis kind 'AppliedTo' requires an attribute type; " +
                 $"{type.FullName} does not derive from System.Attribute.");
 
+        // ImplementedBy on a type only makes sense for an interface. The same empty-result
+        // ambiguity as AppliedTo applies — "implementers of System.String" would silently
+        // return nothing — and the precondition is again a crisp kind check.
+        if (kind == AnalysisKind.ImplementedBy && category == SymbolCategory.Type
+            && type.Kind != TypeKind.Interface)
+            throw new ArgumentException(
+                $"Analysis kind 'ImplementedBy' on a type requires an interface; " +
+                $"{type.FullName} has kind {type.Kind}.");
+
         var header = AnalysisDispatch.HeaderFor(kind);
-        var results = host.RunAnalyzer(header, symbol);
+        // ILSpyX ships no type-level "Implemented By" analyzer (only member-level), so
+        // RunAnalyzer would return empty for this case. AssemblyHost.FindImplementingTypes
+        // synthesizes the result by walking the main module.
+        var results = (kind == AnalysisKind.ImplementedBy && category == SymbolCategory.Type)
+            ? host.FindImplementingTypes(type)
+            : host.RunAnalyzer(header, symbol);
         var display = ReferenceFormatter.FormatSymbol(symbol);
 
         return $"{header} — {display}{originSuffix}:\n" +

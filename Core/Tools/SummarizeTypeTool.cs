@@ -8,7 +8,7 @@ namespace ILens.Tools;
 public static class SummarizeTypeTool
 {
     [McpServerTool(Name = "summarize_type", ReadOnly = true),
-     Description("Get the public and protected API surface of a type — signatures only, no method bodies. " +
+     Description("Summarize the public and protected API surface of a type — signatures only, no method bodies. " +
         "Use this for quick lookups of available members, fields, and properties.")]
     public static string SummarizeType(
         AssemblyHostRegistry registry,

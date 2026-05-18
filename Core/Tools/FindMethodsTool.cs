@@ -34,13 +34,7 @@ public static class FindMethodsTool
         [Description("Accessibility filter. Default: PublicProtected.")] AccessibilityFilter accessibility = AccessibilityFilter.PublicProtected,
         [Description("Cap on result lines. Default 50.")] int? limit = null)
     {
-        if (parameterTypes != null && parameterCount.HasValue
-            && parameterTypes.Length != parameterCount.Value)
-        {
-            throw new ArgumentException(
-                $"parameterCount ({parameterCount.Value}) contradicts " +
-                $"parameterTypes.Length ({parameterTypes.Length}).");
-        }
+        SymbolResolver.ValidateDisambiguationArgs(parameterCount, parameterTypes);
 
         var host = registry.GetOrLoad(assembly);
         var matches = ScanAssembly(host, namePattern, returns, parameterTypes,
@@ -117,7 +111,7 @@ public static class FindMethodsTool
     private static string FormatResults(List<IMethod> matches, int limit)
     {
         if (matches.Count == 0)
-            return "(no methods match)";
+            return "No methods match";
 
         var emitting = Math.Min(matches.Count, limit);
         var sb = new StringBuilder();

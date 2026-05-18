@@ -20,7 +20,7 @@ public static class AnalysisDispatch
             [AnalysisKind.ExtensionMethods] = new("Extension Methods", Set(SymbolCategory.Type)),
             [AnalysisKind.AppliedTo]        = new("Applied To",        Set(SymbolCategory.Type)),
             [AnalysisKind.OverriddenBy]     = new("Overridden By",     Set(SymbolCategory.Method, SymbolCategory.Property, SymbolCategory.Event)),
-            [AnalysisKind.ImplementedBy]    = new("Implemented By",    Set(SymbolCategory.Method, SymbolCategory.Property, SymbolCategory.Event)),
+            [AnalysisKind.ImplementedBy]    = new("Implemented By",    Set(SymbolCategory.Type, SymbolCategory.Method, SymbolCategory.Property, SymbolCategory.Event)),
             [AnalysisKind.Uses]             = new("Uses",              Set(SymbolCategory.Method)),
             [AnalysisKind.Implements]       = new("Implements",        Set(SymbolCategory.Method)),
             [AnalysisKind.ReadBy]           = new("Read By",           Set(SymbolCategory.Field)),
@@ -44,17 +44,6 @@ public static class AnalysisDispatch
     /// <summary>Analysis kinds that accept a given symbol category, in declaration order.</summary>
     public static IReadOnlyList<AnalysisKind> KindsFor(SymbolCategory category) =>
         _kindsByCategory[category];
-
-    /// <summary>Classify a resolved symbol into its <see cref="SymbolCategory"/>.</summary>
-    public static SymbolCategory Classify(ISymbol symbol) => symbol switch
-    {
-        ITypeDefinition => SymbolCategory.Type,
-        IMethod         => SymbolCategory.Method,
-        IProperty       => SymbolCategory.Property,
-        IField          => SymbolCategory.Field,
-        IEvent          => SymbolCategory.Event,
-        _ => throw new ArgumentException($"Unsupported symbol category: {symbol.GetType().Name}."),
-    };
 
     /// <summary>
     /// Verify every <see cref="AnalysisKind"/> resolves to an analyzer ILSpyX actually

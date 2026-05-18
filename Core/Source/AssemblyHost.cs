@@ -100,6 +100,33 @@ public sealed class AssemblyHost : IDisposable
     }
 
     /// <summary>
+    /// Decompile a property to its full C# declaration (signature plus both accessor
+    /// bodies). Thread-safe. ILSpy's decompiler accepts any entity handle, so the
+    /// property's metadata token routes to the same path as <see cref="DecompileMethod"/>
+    /// but emits proper <c>{ get; set; }</c> syntax.
+    /// </summary>
+    public string DecompileProperty(IProperty property)
+    {
+        lock (_decompilerLock)
+        {
+            return _decompiler.DecompileAsString(property.MetadataToken);
+        }
+    }
+
+    /// <summary>
+    /// Decompile an event to its full C# declaration (signature plus add/remove
+    /// accessor bodies). Thread-safe. See <see cref="DecompileProperty"/> for the
+    /// shared entity-handle path through ILSpy.
+    /// </summary>
+    public string DecompileEvent(IEvent @event)
+    {
+        lock (_decompilerLock)
+        {
+            return _decompiler.DecompileAsString(@event.MetadataToken);
+        }
+    }
+
+    /// <summary>
     /// Decompile a type and return the syntax tree for further processing. Thread-safe.
     /// </summary>
     public ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree DecompileTypeSyntaxTree(
@@ -153,6 +180,28 @@ public sealed class AssemblyHost : IDisposable
 
             return Array.Empty<ISymbol>();
         }
+    }
+
+    /// <summary>
+    /// Enumerate every type in the main module that implements <paramref name="interfaceType"/>,
+    /// directly or transitively. Synthesized in-process because ILSpyX ships member-level
+    /// <c>Implemented By</c> analyzers (per method, property, event) but no type-level
+    /// equivalent. Includes derived interfaces alongside concrete classes and structs —
+    /// they are also "types whose base set contains this interface", which is the most
+    /// useful framing for the cross-ref question.
+    /// </summary>
+    public IReadOnlyList<ISymbol> FindImplementingTypes(ITypeDefinition interfaceType)
+    {
+        var target = interfaceType.FullName;
+        var results = new List<ISymbol>();
+        foreach (var type in TypeSystem.MainModule.TypeDefinitions)
+        {
+            if (type == interfaceType)
+                continue;
+            if (type.GetAllBaseTypeDefinitions().Any(b => b.FullName == target))
+                results.Add(type);
+        }
+        return results;
     }
 
     /// <summary>

@@ -134,10 +134,12 @@ public sealed class SymbolResolver
     }
 
     /// <summary>
-    /// Guard mirroring <c>find_methods</c>: when both a parameter count and an ordered
-    /// parameter-type list are given, they must agree on arity.
+    /// Guard for method-overload disambiguation hints: when both a parameter count and an
+    /// ordered parameter-type list are given, they must agree on arity. Used by every tool
+    /// that accepts both hints (decompile_method, analyze, find_methods) so the contradiction
+    /// error message is identical across the surface.
     /// </summary>
-    private static void ValidateDisambiguationArgs(int? parameterCount, string[] parameterTypes)
+    internal static void ValidateDisambiguationArgs(int? parameterCount, string[] parameterTypes)
     {
         if (parameterTypes != null && parameterCount.HasValue
             && parameterTypes.Length != parameterCount.Value)
@@ -384,14 +386,56 @@ public sealed class SymbolResolver
     // --- Property resolution ---------------------------------------------------
 
     /// <summary>
-    /// Resolve a property by name, searching declared → inherited.
+    /// Resolve a property by name, searching declared → inherited. Throws if a name
+    /// matches more than one property on a single type — the only case in C# is an
+    /// indexer with multiple overloads, where silently returning the first match
+    /// would hand back the wrong accessor body. The error names the candidates and
+    /// points at <c>decompile_method</c> on <c>get_Item</c> / <c>set_Item</c> with
+    /// <c>parameterTypes</c> as the disambiguation path.
     /// </summary>
     public (IProperty Property, MemberOrigin Origin) ResolveProperty(
         ITypeDefinition type, string propertyName)
     {
-        return TryFindProperty(type, propertyName)
-            ?? throw new ArgumentException(
-                $"Property '{propertyName}' not found on {type.FullName} or its base types.");
+        var declared = type.Properties.Where(p => p.Name == propertyName).ToList();
+        if (declared.Count > 1)
+            throw AmbiguousPropertyError(declared, type.FullName, propertyName);
+        if (declared.Count == 1)
+            return (declared[0], MemberOrigin.Declared);
+
+        foreach (var baseType in TypeWalker.WalkBaseTypes(type))
+        {
+            var inherited = baseType.Properties.Where(p => p.Name == propertyName).ToList();
+            if (inherited.Count > 1)
+                throw AmbiguousPropertyError(inherited, baseType.FullName, propertyName);
+            if (inherited.Count == 1)
+                return (inherited[0], MemberOrigin.InheritedFrom(baseType.FullName));
+        }
+
+        throw new ArgumentException(
+            $"Property '{propertyName}' not found on {type.FullName} or its base types.");
+    }
+
+    private static ArgumentException AmbiguousPropertyError(
+        List<IProperty> candidates, string context, string propertyName)
+    {
+        var rendered = string.Join(", ", candidates.Select(FormatPropertyCandidate));
+        return new ArgumentException(
+            $"Property '{propertyName}' on {context} has {candidates.Count} overloads — " +
+            "in C# this is always an indexer, but non-C# metadata or obfuscation can " +
+            "produce non-indexer collisions too. decompile_property does not disambiguate; " +
+            $"use decompile_method on get_{propertyName} / set_{propertyName} with " +
+            $"parameterTypes. Candidates: {rendered}.");
+    }
+
+    private static string FormatPropertyCandidate(IProperty property)
+    {
+        if (property.IsIndexer)
+        {
+            var args = string.Join(", ",
+                property.Parameters.Select(p => ReferenceFormatter.FormatTypeRef(p.Type)));
+            return $"{property.DeclaringType.FullName}.{property.Name}[{args}]";
+        }
+        return $"{property.DeclaringType.FullName}.{property.Name}";
     }
 
     private (IProperty Property, MemberOrigin Origin)? TryFindProperty(
@@ -414,14 +458,41 @@ public sealed class SymbolResolver
     // --- Event resolution ------------------------------------------------------
 
     /// <summary>
-    /// Resolve an event by name, searching declared → inherited.
+    /// Resolve an event by name, searching declared → inherited. Throws on the
+    /// same multi-match condition as <see cref="ResolveProperty"/> for symmetry —
+    /// C# does not let events overload, so the branch is defensive and fires only
+    /// on metadata produced by other source languages or obfuscators.
     /// </summary>
     public (IEvent Event, MemberOrigin Origin) ResolveEvent(
         ITypeDefinition type, string eventName)
     {
-        return TryFindEvent(type, eventName)
-            ?? throw new ArgumentException(
-                $"Event '{eventName}' not found on {type.FullName} or its base types.");
+        var declared = type.Events.Where(e => e.Name == eventName).ToList();
+        if (declared.Count > 1)
+            throw AmbiguousEventError(declared, type.FullName, eventName);
+        if (declared.Count == 1)
+            return (declared[0], MemberOrigin.Declared);
+
+        foreach (var baseType in TypeWalker.WalkBaseTypes(type))
+        {
+            var inherited = baseType.Events.Where(e => e.Name == eventName).ToList();
+            if (inherited.Count > 1)
+                throw AmbiguousEventError(inherited, baseType.FullName, eventName);
+            if (inherited.Count == 1)
+                return (inherited[0], MemberOrigin.InheritedFrom(baseType.FullName));
+        }
+
+        throw new ArgumentException(
+            $"Event '{eventName}' not found on {type.FullName} or its base types.");
+    }
+
+    private static ArgumentException AmbiguousEventError(
+        List<IEvent> candidates, string context, string eventName)
+    {
+        var rendered = string.Join(", ",
+            candidates.Select(e => $"{e.DeclaringType.FullName}.{e.Name}"));
+        return new ArgumentException(
+            $"Event '{eventName}' on {context} has {candidates.Count} entries with " +
+            "the same name — non-C# metadata. Candidates: " + rendered + ".");
     }
 
     private (IEvent Event, MemberOrigin Origin)? TryFindEvent(

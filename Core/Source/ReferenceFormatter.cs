@@ -91,7 +91,12 @@ public static class ReferenceFormatter
         return TypeKeyword(type) ?? type.Name;
     }
 
-    private static string TypeKeyword(IType type) =>
+    /// <summary>
+    /// The C# keyword for a well-known framework type, or <c>null</c> if the type
+    /// has no keyword form. Public so <see cref="TypeMatcher"/> can recognize keyword
+    /// patterns the way this formatter renders them.
+    /// </summary>
+    public static string TypeKeyword(IType type) =>
         type.Namespace == "System" ? type.Name switch
         {
             "Boolean" => "bool",
