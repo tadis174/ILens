@@ -9,8 +9,8 @@ because they all share the .NET Foundation copyright and license.
 
 ## Provenance
 
-- Source URL: https://raw.githubusercontent.com/dotnet/runtime/v10.0.8/LICENSE.TXT
-- Vendored from: dotnet/runtime, tag `v10.0.8`
+- Source URL: https://raw.githubusercontent.com/dotnet/runtime/v10.0.9/LICENSE.TXT
+- Vendored from: dotnet/runtime, tag `v10.0.9`
 
 The pinned tag matches the runtime version this build bundles. The LICENSE
 file does not change between 10.0.x patch versions in practice; using the

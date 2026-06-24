@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Reflection.Emit;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 
@@ -49,6 +50,139 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         });
         Assert.DoesNotContain("No types match", text);
         Assert.Contains("Decompiler", text);
+    }
+
+    [Fact]
+    public async Task SearchTypes_DefaultsToHidingRoslynClosureClasses()
+    {
+        // <>c is the canonical Roslyn name for the per-method cached-delegate
+        // host. Filtered by default — searching for it should return "No types
+        // match". With the flag off, the same search hits real entries.
+        string filtered = await CallToolText("search_types", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["pattern"] = "<>c",
+        });
+        Assert.Contains("No types match", filtered);
+
+        string unfiltered = await CallToolText("search_types", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["pattern"] = "<>c",
+            ["excludeCompilerGenerated"] = false,
+        });
+        Assert.DoesNotContain("No types match", unfiltered);
+    }
+
+    [Fact]
+    public async Task SearchTypes_FiltersBurstDirectCallWrapperNestedType()
+    {
+        // TASK-22 regression. Burst's source generator emits nested helper types
+        // whose names carry `$BurstDirectCall` / `$PostfixBurstDelegate` suffixes
+        // (the outer type is a regular user class, so the chain-walk in
+        // CompilerGeneratedFilter only catches them via the inner name).
+        // '$' isn't a valid C# identifier character, so we can't reach this
+        // shape via a C# fixture project — synthesize a tiny PE on disk via
+        // PersistedAssemblyBuilder (System.Reflection.Emit, .NET 9+) and
+        // exercise the filter through the live MCP server.
+        var fixturePath = Path.Combine(
+            AppContext.BaseDirectory,
+            $"BurstWrapperFixture_{Guid.NewGuid():N}.dll");
+        try
+        {
+            SynthesizeBurstWrapperFixture(fixturePath);
+
+            // Filter on by default — the nested `$BurstDirectCall` type drops out.
+            string filtered = await CallToolText("search_types", new()
+            {
+                ["assembly"] = fixturePath,
+                ["pattern"] = "$BurstDirectCall",
+            });
+            Assert.Contains("No types match", filtered);
+
+            // Filter off — the same search hits the synthesized nested type.
+            string unfiltered = await CallToolText("search_types", new()
+            {
+                ["assembly"] = fixturePath,
+                ["pattern"] = "$BurstDirectCall",
+                ["excludeCompilerGenerated"] = false,
+            });
+            Assert.DoesNotContain("No types match", unfiltered);
+        }
+        finally
+        {
+            // Best-effort cleanup. The MCP server keeps the file mmapped while
+            // its host stays in the cache, so Delete can fail on Windows; the
+            // unique GUID in the path means a leftover doesn't collide.
+            try { if (File.Exists(fixturePath)) File.Delete(fixturePath); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>
+    /// Build a one-type assembly with a Burst-style nested helper and save it
+    /// to disk. The outer type is a regular C# class; the inner type's name
+    /// carries the `$BurstDirectCall` suffix Unity's Burst source generator
+    /// emits, which is what TASK-22 teaches <see cref="ILens.CompilerGeneratedFilter"/>
+    /// to recognize.
+    /// </summary>
+    private static void SynthesizeBurstWrapperFixture(string path)
+    {
+        var aname = new AssemblyName("BurstWrapperFixture")
+        {
+            Version = new Version(1, 0, 0, 0),
+        };
+        var ab = new PersistedAssemblyBuilder(aname, typeof(object).Assembly);
+        var mb = ab.DefineDynamicModule("BurstWrapperFixture");
+
+        var container = mb.DefineType(
+            "BurstWrapperFixture.Container",
+            TypeAttributes.Public | TypeAttributes.Class);
+        container.DefineNestedType(
+            "Compute_0000ABCD$BurstDirectCall",
+            TypeAttributes.NestedPrivate | TypeAttributes.Class)
+            .CreateType();
+        container.CreateType();
+
+        ab.Save(path);
+    }
+
+    [Fact]
+    public async Task ListTypes_DropsCountWhenCompilerGeneratedIsExcluded()
+    {
+        // Any well-trafficked namespace in ICSharpCode.Decompiler.dll has
+        // Roslyn helpers (display classes, anonymous types). The filtered set
+        // must be strictly smaller — assert the count drops, without naming
+        // a specific generated type (whose presence drifts upstream).
+        string filtered = await CallToolText("list_types", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["namespaceName"] = "ICSharpCode.Decompiler.IL",
+        });
+        string unfiltered = await CallToolText("list_types", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["namespaceName"] = "ICSharpCode.Decompiler.IL",
+            ["excludeCompilerGenerated"] = false,
+        });
+
+        int filteredCount = ParseLeadingCount(filtered);
+        int unfilteredCount = ParseLeadingCount(unfiltered);
+        Assert.True(unfilteredCount > filteredCount,
+            $"Expected the unfiltered count ({unfilteredCount}) to exceed the " +
+            $"filtered count ({filteredCount}); the filter would otherwise be a no-op.");
+    }
+
+    /// <summary>
+    /// Parses the leading "N types:" from list_types output. The tool's first
+    /// line is always "<count> types:" — pull the integer.
+    /// </summary>
+    private static int ParseLeadingCount(string text)
+    {
+        var firstSpace = text.IndexOf(' ');
+        if (firstSpace < 0) return -1;
+        return int.TryParse(text.AsSpan(0, firstSpace), out var n) ? n : -1;
     }
 
     [Fact]

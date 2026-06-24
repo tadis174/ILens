@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "measuredAtUtc": "2026-05-18",
+  "measuredAtUtc": "2026-06-23",
   "charsPerToken": 4,
-  "ilensVersion": "6",
+  "ilensVersion": "7",
   "target": {
     "assembly": "ICSharpCode.Decompiler.dll",
     "version": "9.1.0.7988",
@@ -20,8 +20,8 @@
       "task": "List the public types in a namespace",
       "ilensTool": "list_types",
       "ilensCall": "list_types(namespaceName: 'ICSharpCode.Decompiler.TypeSystem')",
-      "chars": 6845,
-      "tokensEstimated": 1712
+      "chars": 4783,
+      "tokensEstimated": 1196
     },
     {
       "task": "See the API surface of one mid-sized class",

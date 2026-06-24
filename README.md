@@ -8,11 +8,11 @@ The default fallback for an AI agent inspecting a compiled .NET assembly is to s
 
 | Task | `ilspycmd` cost | ILens tool | ILens cost |
 |------|----------------:|------------|-----------:|
-| List the public types in a namespace | 1,041,476 tokens | `list_types` | 1,712 tokens |
+| List the public types in a namespace | 1,041,476 tokens | `list_types` | 1,196 tokens |
 | See the API surface of one mid-sized class | 1,041,476 tokens | `summarize_type` | 895 tokens |
 | Find which types expose a given method | 1,041,476 tokens | `find_methods` | 618 tokens |
 
-*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-05-18; token figures are character counts divided by 4, not a real tokenizer.*
+*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-06-23; token figures are character counts divided by 4, not a real tokenizer.*
 
 ILens turns assembly inspection into bounded, targeted lookups: list types in a namespace, summarize one type's public surface, find methods by name, decompile a single method body, run cross-reference analysis (callers, overrides, implementations, extension methods, attribute usage). Each call returns a focused response — making it cheap enough to leave registered as an always-available tool.
 
@@ -92,6 +92,9 @@ files directly, or web-searching for source.
   `InstantiatedBy`, `ExposedBy`, `ExtensionMethods`, `AppliedTo`,
   `OverriddenBy`, `ImplementedBy`, `Uses`, `Implements`, `ReadBy`,
   `AssignedBy`. Valid kinds depend on the symbol category.
+- Comparing two builds: `list_changed_types` (what differs between two
+  assemblies), `compare_type` (per-type member and body diff), `compare_method`
+  (one method's body as C# or IL).
 ````
 
 #### Per-line walkthrough
@@ -100,6 +103,7 @@ files directly, or web-searching for source.
 - The discovery bullet routes "I don't know the full name" tasks to the right tool: a partial name goes to `search_types`, a known namespace goes to `list_types`, a method shape goes to `find_methods`.
 - The reading bullet escalates from cheapest to most expensive: `summarize_type` first, `list_members` when only part of the surface is needed, `decompile_method` for one method body (or `decompile_property` / `decompile_event` for the whole property or event without having to know the IL accessor prefix), `decompile_type` only when full source is required.
 - The `analyze` bullet enumerates the `kind` enum so the model picks values the schema accepts — using one that does not apply to the symbol category produces an error like `Analysis kind 'ReadBy' is not valid for Method`.
+- The comparison bullet is for "did this change between two builds?" work: `list_changed_types` to find what differs, `compare_type` for one type's member and body diff, `compare_method` to read a single differing body.
 
 ## Full reference
 

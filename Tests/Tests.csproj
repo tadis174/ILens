@@ -8,6 +8,16 @@
     <IsPublishable>false</IsPublishable>
   </PropertyGroup>
 
+  <!-- Fixtures/ holds standalone projects (e.g. HarmonyMod) that produce DLLs
+       Tests inspects, not source compiled into the test assembly itself.
+       Without this exclusion, Tests' default glob would compile their .cs
+       files and Tests would also need their PackageReferences. -->
+  <ItemGroup>
+    <Compile Remove="Fixtures\**" />
+    <None Remove="Fixtures\**" />
+    <EmbeddedResource Remove="Fixtures\**" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
@@ -22,6 +32,26 @@
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" Version="1.2.0" />
     <PackageReference Include="ICSharpCode.Decompiler" Version="9.1.0.7988" />
+  </ItemGroup>
+
+  <!-- HarmonyMod fixture: a tiny Harmony-patching assembly compiled from
+       Fixtures/HarmonyMod/, used as the inspection target for the
+       find_harmony_dependencies tests. HarmonyMod2 is the RVA-shifted twin
+       used by the TASK-21 regression test (same source, extra Padding class
+       declared earlier → identical IL at different file positions).
+       ReferenceOutputAssembly=false keeps their types out of Tests'
+       compilation — we only want the DLLs to land in the test output bin. -->
+  <ItemGroup>
+    <ProjectReference Include="Fixtures\HarmonyMod\HarmonyMod.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="Fixtures\HarmonyMod2\HarmonyMod2.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

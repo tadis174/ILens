@@ -6,4 +6,5 @@ Build/doc/*
 CLAUDE.md
 .claude/
 .mcp.json
+backlog/
 manifests/

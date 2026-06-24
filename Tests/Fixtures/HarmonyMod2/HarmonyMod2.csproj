@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    RVA-shifted twin of HarmonyMod. Compiles HarmonyMod/Patches.cs verbatim
+    plus an extra Padding class declared earlier in source order, so methods
+    on HarmonyMod.TargetA et al. produce byte-identical IL in HarmonyMod.dll
+    and HarmonyMod2.dll but land at different file RVAs. This is the
+    regression target for TASK-21 — AssemblyHost.DisassembleMethodBody
+    strips ILSpy's "// Method begins at RVA …" header so the two disassembly
+    strings compare equal despite the RVA shift.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+    <AssemblyName>HarmonyMod2</AssemblyName>
+    <RootNamespace>HarmonyMod</RootNamespace>
+    <NoWarn>$(NoWarn);CS0414;CS0169;CS0649</NoWarn>
+    <!-- Disable the default *.cs glob so we control source order — Padding
+         must come before the linked Patches.cs to actually shift RVAs. -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.3.6" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Padding.cs" />
+    <Compile Include="..\HarmonyMod\Patches.cs" Link="Patches.cs" />
+  </ItemGroup>
+
+</Project>

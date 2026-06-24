@@ -12,16 +12,24 @@ public static class SearchTypesTool
      Description("Search for types by name pattern. Matching is a case-insensitive substring " +
         "applied to each type's short name (the namespace is not part of the match). " +
         "Results are returned as fully qualified names so they can be fed into other tools verbatim. " +
-        "Returns up to 50 matches.")]
+        "Returns up to 50 matches. By default hides compiler-generated noise — " +
+        CompilerGeneratedFilter.PatternsDescription +
+        " Pass excludeCompilerGenerated=false to include everything.")]
     public static string SearchTypes(
         AssemblyHostRegistry registry,
         [Description("Path to the .NET assembly to inspect (must be under an allowed root).")] string assembly,
         [Description("Search pattern matched as a case-insensitive substring against each type's short name. " +
-            "E.g., 'Stream' finds MemoryStream, FileStream, BufferedStream, etc.")] string pattern)
+            "E.g., 'Stream' finds MemoryStream, FileStream, BufferedStream, etc.")] string pattern,
+        [Description("Drop types the compiler emitted (closures, anonymous types, source-generator output). Default true.")] bool excludeCompilerGenerated = true)
     {
         var host = registry.GetOrLoad(assembly);
-        var matches = host.TypeSystem.MainModule.TypeDefinitions
-            .Where(t => t.Name.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+        IEnumerable<ICSharpCode.Decompiler.TypeSystem.ITypeDefinition> query =
+            host.TypeSystem.MainModule.TypeDefinitions
+                .Where(t => t.Name.Contains(pattern, StringComparison.OrdinalIgnoreCase));
+        if (excludeCompilerGenerated)
+            query = query.Where(t => !CompilerGeneratedFilter.IsCompilerGenerated(t));
+
+        var matches = query
             .OrderBy(t => t.FullName)
             .Take(MaxResults + 1)
             .ToList();

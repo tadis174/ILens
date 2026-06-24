@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only fixture: a tiny Harmony-patching assembly that exercises every
+    pattern find_harmony_dependencies extracts. Not consumed by Tests' source
+    code — only its compiled output (HarmonyMod.dll + HarmonyLib.dll) is
+    inspected by the ILens server during the e2e suite.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+    <!-- Suppress unused-references warning since this DLL has no consumers. -->
+    <NoWarn>$(NoWarn);CS0414;CS0169;CS0649</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.3.6" />
+  </ItemGroup>
+
+</Project>

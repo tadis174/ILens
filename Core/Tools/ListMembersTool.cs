@@ -12,7 +12,7 @@ public static class ListMembersTool
 
     [McpServerTool(Name = "list_members", ReadOnly = true),
      Description("List members of a type, grouped by kind (Methods/Properties/Fields/Events). " +
-        "Returns one signature per line — no method bodies, no XML doc. " +
+        "Returns one signature per line — no method bodies, no documentation strings. " +
         "Filter by member kind, accessibility, and case-insensitive name pattern. " +
         "Cheaper than summarize_type when you only need part of the API surface.")]
     public static string ListMembers(
