@@ -170,28 +170,60 @@ public sealed class SymbolResolver
     private (IMethod Method, MemberOrigin Origin)? TryFindMethod(
         ITypeDefinition type, string methodName, int? parameterCount, string[] parameterTypes)
     {
-        // 1. Declared on the requested type
-        var methods = type.Methods.Where(m => m.Name == methodName).ToList();
-        if (methods.Count > 0)
-            return (DisambiguateMethod(methods, type.FullName, methodName, parameterCount, parameterTypes),
-                MemberOrigin.Declared);
+        var hinted = parameterCount.HasValue || parameterTypes != null;
 
-        // 2. Walk base class chain
-        foreach (var baseType in TypeWalker.WalkBaseTypes(type))
+        // 1-2. Walk the requested type, then its base-class chain (most-derived first).
+        // C# overload resolution spans the inheritance chain: a base method of a different
+        // signature stays a candidate even when the requested type declares a same-named one,
+        // so `foo.Bar("x")` can bind to a base `Bar(string)` past a derived `Bar(int)`. A hint
+        // must therefore keep walking past a level whose overloads don't satisfy it, rather
+        // than stopping at the first level that merely has the name (TASK-24). The most-derived
+        // satisfying level wins, so an override/new still resolves to the derived declaration.
+        // `named` accumulates every same-named overload across the chain so an ultimately
+        // unsatisfied hint can report the whole set instead of just the requested type's.
+        var levels = new List<(ITypeDefinition Level, MemberOrigin Origin)>
         {
-            methods = baseType.Methods.Where(m => m.Name == methodName).ToList();
-            if (methods.Count > 0)
-                return (DisambiguateMethod(methods, baseType.FullName, methodName, parameterCount, parameterTypes),
-                    MemberOrigin.InheritedFrom(baseType.FullName));
+            (type, MemberOrigin.Declared)
+        };
+        foreach (var baseType in TypeWalker.WalkBaseTypes(type))
+            levels.Add((baseType, MemberOrigin.InheritedFrom(baseType.FullName)));
+
+        var named = new List<IMethod>();
+        foreach (var (level, origin) in levels)
+        {
+            var here = level.Methods.Where(m => m.Name == methodName).ToList();
+            if (here.Count == 0)
+                continue;
+
+            // No hint: the most-derived level that declares the name wins, exactly as before —
+            // a single method resolves, several report a same-level ambiguity.
+            if (!hinted)
+                return (DisambiguateMethod(here, level.FullName, methodName, null, null), origin);
+
+            named.AddRange(here);
+            var satisfying = NarrowByHint(here, parameterCount, parameterTypes);
+            if (satisfying.Count == 1)
+                return (satisfying[0], origin);
+            if (satisfying.Count > 1)
+                // Genuinely ambiguous at this level; a base level cannot override that, so
+                // hand off to DisambiguateMethod for the "N matching overloads" error.
+                return (DisambiguateMethod(here, level.FullName, methodName, parameterCount, parameterTypes),
+                    origin);
+            // satisfying.Count == 0: a base level may still declare a matching overload — walk on.
         }
 
-        // 3. Extension methods
+        // 3. Extension methods, tried only after no instance overload satisfied the request —
+        // the order C# uses, where extensions are a fallback for unresolved instance calls.
         var extensions = FindExtensionMethodsByName(type, methodName);
         if (extensions.Count > 0)
         {
-            var method = DisambiguateMethod(extensions, "(extension methods)",
-                methodName, parameterCount, parameterTypes);
-            return (method, MemberOrigin.ExtensionOn(method.DeclaringType.FullName));
+            if (!hinted || NarrowByHint(extensions, parameterCount, parameterTypes).Count > 0)
+            {
+                var method = DisambiguateMethod(extensions, "(extension methods)",
+                    methodName, parameterCount, parameterTypes);
+                return (method, MemberOrigin.ExtensionOn(method.DeclaringType.FullName));
+            }
+            named.AddRange(extensions);
         }
 
         // 4. Accessor-name fallback. find_methods hides accessors so generic browsing
@@ -228,6 +260,15 @@ public sealed class SymbolResolver
             }
         }
 
+        // A hint was given and the name exists somewhere on the chain (or as an extension),
+        // but nothing satisfies it. Report the whole candidate set — the overload the caller
+        // wanted may be declared on a base type, and naming it is the actionable result.
+        if (hinted && named.Count > 0)
+            throw new ArgumentException(
+                $"No overload of '{methodName}' on {type.FullName} matches " +
+                $"{DescribeHint(parameterCount, parameterTypes)}. " +
+                $"Available: {ReferenceFormatter.FormatMethodList(named)}.");
+
         return null;
     }
 
@@ -248,46 +289,35 @@ public sealed class SymbolResolver
     }
 
     /// <summary>
-    /// Pick a single method from a same-name candidate set. A single candidate is
-    /// returned directly. Otherwise the set is narrowed by the most specific hint the
-    /// caller gave — <paramref name="parameterTypes"/> (matched per position via
-    /// <see cref="TypeMatcher"/>), else <paramref name="parameterCount"/> (by arity).
-    /// If the narrowed set is not exactly one, an error lists the candidates rather
-    /// than silently returning the first.
+    /// Pick a single method from a same-name candidate set. The set is narrowed by the
+    /// most specific hint the caller gave — <paramref name="parameterTypes"/> (matched
+    /// per position via <see cref="TypeMatcher"/>), else <paramref name="parameterCount"/>
+    /// (by arity). If the narrowed set is not exactly one, an error lists the candidates
+    /// rather than silently returning the first.
     /// </summary>
+    /// <remarks>
+    /// A hint is a filter that must be satisfied, not a tie-breaker consulted only when
+    /// more than one candidate survives. A lone candidate is checked against the hint too:
+    /// short-circuiting on <c>methods.Count == 1</c> answers a question the caller did not
+    /// ask — handing back <c>Equals(Thing)</c> to someone who explicitly asked for
+    /// <c>Equals(object)</c>, with nothing in the output to reveal the substitution. An
+    /// accurate "no overload matches" is a first-class result, and often the very fact the
+    /// caller was establishing; callers use ILens precisely because they cannot read the IL
+    /// themselves, so they have no independent way to notice a silent swap.
+    /// </remarks>
     private IMethod DisambiguateMethod(List<IMethod> methods, string context,
         string methodName, int? parameterCount, string[] parameterTypes)
     {
-        if (methods.Count == 1)
-            return methods[0];
-
-        List<IMethod> candidates;
-        string filter;
-        if (parameterTypes != null)
-        {
-            candidates = methods.Where(m => MatchesParameterTypes(m, parameterTypes)).ToList();
-            filter = $"parameter types ({string.Join(", ", parameterTypes)})";
-        }
-        else if (parameterCount.HasValue)
-        {
-            candidates = methods.Where(m => m.Parameters.Count == parameterCount.Value).ToList();
-            filter = $"{parameterCount.Value} parameter(s)";
-        }
-        else
-        {
-            candidates = methods;
-            filter = null;
-        }
+        var candidates = NarrowByHint(methods, parameterCount, parameterTypes);
 
         if (candidates.Count == 1)
             return candidates[0];
 
-        if (candidates.Count == 0)
-            throw new ArgumentException(
-                $"No overload of '{methodName}' on {context} matches {filter}. " +
-                $"Available: {ReferenceFormatter.FormatMethodList(methods)}.");
-
-        // More than one candidate still matches.
+        // Control reaches here only with more than one candidate: every caller passes a set
+        // the hint is known to leave non-empty — the no-hint set is returned whole, and the
+        // hinted callers pre-check for at least one match before delegating here. A hint that
+        // matches nothing is handled upstream by TryFindMethod's cross-chain error, which can
+        // name the whole inheritance chain rather than just this one level's candidates.
         var hint = parameterTypes != null
             ? "the candidates share these parameter types and cannot be narrowed further"
             : parameterCount.HasValue
@@ -297,6 +327,33 @@ public sealed class SymbolResolver
             $"'{methodName}' on {context} has {candidates.Count} matching overloads; {hint}: " +
             $"{ReferenceFormatter.FormatMethodList(candidates)}.");
     }
+
+    /// <summary>
+    /// Narrow a same-name candidate set by the most specific hint supplied —
+    /// <paramref name="parameterTypes"/> (matched per position via <see cref="TypeMatcher"/>),
+    /// else <paramref name="parameterCount"/> (by arity), else the set unchanged. A pure
+    /// filter: the 0 / 1 / many outcomes are interpreted by the caller, which is what lets
+    /// <see cref="TryFindMethod"/> keep walking the base chain when a level yields zero.
+    /// </summary>
+    private static List<IMethod> NarrowByHint(
+        List<IMethod> methods, int? parameterCount, string[] parameterTypes)
+    {
+        if (parameterTypes != null)
+            return methods.Where(m => MatchesParameterTypes(m, parameterTypes)).ToList();
+        if (parameterCount.HasValue)
+            return methods.Where(m => m.Parameters.Count == parameterCount.Value).ToList();
+        return methods;
+    }
+
+    /// <summary>
+    /// Describe the disambiguation hint for an error message, e.g. <c>parameter types
+    /// (string, int)</c> or <c>2 parameter(s)</c>. Only called when a hint is present — a
+    /// no-hint filter never removes a candidate, so the "nothing matches" paths never reach it.
+    /// </summary>
+    private static string DescribeHint(int? parameterCount, string[] parameterTypes) =>
+        parameterTypes != null
+            ? $"parameter types ({string.Join(", ", parameterTypes)})"
+            : $"{parameterCount.Value} parameter(s)";
 
     /// <summary>
     /// True if the method's parameters match the ordered <paramref name="patterns"/>

@@ -363,10 +363,11 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         // types ("Boolean", "Int32"); this one feeds the C# keyword form ("bool", "int")
         // — what find_methods and decompile_method's "Available: ..." error message
         // both render. The matcher must accept that form too, since it is what an LLM
-        // is most likely to feed back in. The same-arity-overload requirement is
-        // essential: SymbolResolver.DisambiguateMethod short-circuits when the candidate
-        // set has a single method, so without it the picked method might bypass the
-        // matcher entirely and the test would pass without exercising the keyword path.
+        // is most likely to feed back in. Selecting a same-arity overload group keeps the
+        // test honest about why it passes: DisambiguateMethod no longer short-circuits on
+        // a single candidate, so the keyword patterns are checked either way, but only a
+        // same-arity group forces them to actually discriminate between candidates rather
+        // than merely validate the one method that was going to be returned anyway.
         // The search scans the whole assembly because no single stable type on the
         // upstream package is guaranteed to host an overload group whose members include
         // a primitive parameter.
@@ -658,6 +659,303 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         // emits this for both field-like (`event T Foo;`) and custom-accessor
         // (`event T Foo { add { ... } }`) forms.
         Assert.Matches(@"\bevent\s+", text);
+    }
+
+    [Fact]
+    public async Task DecompileMethod_WithParameterTypesMatchingNoOverload_ReturnsError()
+    {
+        // The regression that matters most: a disambiguation hint is a filter that must be
+        // satisfied, not a tie-breaker only consulted when several candidates survive.
+        // DisambiguateMethod used to return early on a single candidate, so asking
+        // Verse.Thing for Equals(object) — which does not exist — handed back Equals(Thing)
+        // and read as proof of value equality: the exact opposite of the truth.
+        // A single-overload method is therefore the essential shape to test.
+        var method = SingleOverloadMethod(excludingArity: ImpossibleArity);
+
+        var (result, text) = await CallToolExpectingError("decompile_method", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = method.DeclaringType!.FullName!,
+            ["methodName"] = method.Name,
+            ["parameterTypes"] = Enumerable.Repeat("object", ImpossibleArity).ToArray(),
+        });
+
+        Assert.True(result.IsError,
+            $"Expected a no-matching-overload rejection rather than a substituted overload, got: {text}");
+        Assert.Contains("No overload", text);
+        // The error must name what *does* exist — an accurate negative is the result the
+        // caller was after, so it has to carry enough to act on.
+        Assert.Contains("Available", text);
+        Assert.Contains(method.Name, text);
+    }
+
+    [Fact]
+    public async Task DecompileMethod_WithParameterCountMatchingNoOverload_ReturnsError()
+    {
+        // Companion to the test above: parameterCount is the other hint that was skipped
+        // for a lone candidate, and it takes a separate branch in DisambiguateMethod.
+        var method = SingleOverloadMethod(excludingArity: ImpossibleArity);
+
+        var (result, text) = await CallToolExpectingError("decompile_method", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = method.DeclaringType!.FullName!,
+            ["methodName"] = method.Name,
+            ["parameterCount"] = ImpossibleArity,
+        });
+
+        Assert.True(result.IsError,
+            $"Expected a no-matching-overload rejection rather than a substituted overload, got: {text}");
+        Assert.Contains("No overload", text);
+        Assert.Contains("Available", text);
+    }
+
+    [Fact]
+    public async Task DecompileMethod_WithHintMatchingOnlyABaseOverload_ResolvesToTheBaseMethod()
+    {
+        // TASK-24: C# overload resolution spans the inheritance chain. When the requested type
+        // declares Bar(int) and a base declares Bar(string), asking for Bar(string) used to be
+        // rejected — TryFindMethod stopped at the first level that had the *name* and matched
+        // the hint only against that level. It now keeps walking to the base, so the base-only
+        // overload resolves and decompiles, tagged with its inherited origin.
+        var (derived, name, baseOverload) = MethodWithBaseOnlyOverload();
+        var paramTypes = baseOverload.GetParameters()
+            .Select(p => CSharpKeyword(p.ParameterType.Name) ?? p.ParameterType.Name)
+            .ToArray();
+
+        string text = await CallToolText("decompile_method", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = derived.FullName!,
+            ["methodName"] = name,
+            ["parameterTypes"] = paramTypes,
+        });
+
+        // A body brace proves resolution reached a real method instead of erroring.
+        Assert.Contains("{", text);
+        // The header anchors on the requested type but discloses the inherited origin — the
+        // base type where the resolved overload actually lives.
+        Assert.Contains($"// {derived.FullName}.{name}(", text);
+        Assert.Contains($"[inherited from {baseOverload.DeclaringType!.FullName}]", text);
+    }
+
+    [Fact]
+    public async Task DecompileMethod_Header_DisclosesTheResolvedSignature()
+    {
+        // Defense in depth for the regression above: a bare "// Type.Method" header cannot
+        // distinguish one overload from another, so a caller has no way to notice a
+        // substitution. The header carries the full resolved signature instead.
+        var method = SingleOverloadMethod(excludingArity: ImpossibleArity);
+
+        string text = await CallToolText("decompile_method", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = method.DeclaringType!.FullName!,
+            ["methodName"] = method.Name,
+        });
+
+        // Parameter list and return arrow, not just the bare name.
+        Assert.Contains($"// {method.DeclaringType!.FullName}.{method.Name}(", text);
+        Assert.Contains("→", text);
+    }
+
+    [Fact]
+    public async Task FindMethods_WithUnknownArgument_ReturnsErrorNamingValidArguments()
+    {
+        // The reported call: typeName/methodName are decompile_method's parameters, not
+        // find_methods'. The SDK drops unrecognized keys, and because every find_methods
+        // filter is optional the call used to run completely unfiltered and return the
+        // whole assembly — a wrong answer wearing the shape of a right one.
+        var (result, text) = await CallToolExpectingError("find_methods", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["methodName"] = "Equals",
+        });
+
+        Assert.True(result.IsError,
+            $"Expected unrecognized arguments to be rejected rather than ignored, got: {text}");
+        Assert.Contains("Unknown argument", text);
+        Assert.Contains("typeName", text);
+        Assert.Contains("methodName", text);
+        // Naming the valid set is what turns this into a one-round-trip fix.
+        Assert.Contains("namePattern", text);
+        Assert.Contains("declaringType", text);
+    }
+
+    [Fact]
+    public async Task FindMethods_ByExactDeclaringType_ReturnsOnlyThatTypesMethods()
+    {
+        var type = TypeWithSeveralPlainMethods();
+
+        string text = await CallToolText("find_methods", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["declaringType"] = type.FullName!,
+            ["accessibility"] = "All",
+            ["limit"] = 200,
+        });
+
+        Assert.DoesNotContain("No methods match", text);
+        // Every emitted result line is indented; each must belong to the requested type.
+        var resultLines = text.Split('\n')
+            .Where(line => line.StartsWith("  ") && !line.StartsWith("  ..."))
+            .ToList();
+        Assert.NotEmpty(resultLines);
+        Assert.All(resultLines, line =>
+            Assert.Contains($"{type.FullName}.", line));
+    }
+
+    [Fact]
+    public async Task FindMethods_WithNonexistentDeclaringType_ReturnsError()
+    {
+        // An exact name is a claim that the type exists. Answering a typo with
+        // "No methods match" reads as "that type has no such methods".
+        var (result, text) = await CallToolExpectingError("find_methods", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["declaringType"] = "ICSharpCode.Decompiler.ThisTypeDoesNotExist",
+        });
+
+        Assert.True(result.IsError, $"Expected a type-not-found rejection, got: {text}");
+        Assert.Contains("Type not found", text);
+    }
+
+    [Fact]
+    public async Task FindMethods_WithBothDeclaringTypeAndPattern_ReturnsError()
+    {
+        var (result, text) = await CallToolExpectingError("find_methods", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["declaringType"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["declaringTypePattern"] = "Decompiler",
+        });
+
+        Assert.True(result.IsError, $"Expected a mutually-exclusive rejection, got: {text}");
+        Assert.Contains("mutually exclusive", text);
+    }
+
+    /// <summary>
+    /// An arity no discovered test method will have, so a hint built from it is
+    /// guaranteed to match nothing.
+    /// </summary>
+    private const int ImpossibleArity = 7;
+
+    /// <summary>
+    /// Find a public method in the test target that is the only overload of its name on its
+    /// declaring type — the shape in which a disambiguation hint used to be skipped. Special
+    /// names (accessors, operators) are excluded: accessors resolve through
+    /// <c>SymbolResolver</c>'s accessor-name fallback, which bypasses overload matching by
+    /// design. Discovered rather than hardcoded so the test survives upstream API drift.
+    /// </summary>
+    private static MethodInfo SingleOverloadMethod(int excludingArity)
+    {
+        var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
+        return assembly.GetExportedTypes()
+            .Where(t => !t.IsGenericType && !t.IsNested)
+            .SelectMany(t => t.GetMethods(PublicDeclared)
+                .Where(m => !m.IsGenericMethod && !m.IsSpecialName)
+                .GroupBy(m => m.Name)
+                .Where(g => g.Count() == 1)
+                .Select(g => g.Single()))
+            .FirstOrDefault(m => m.GetParameters().Length != excludingArity)
+            ?? throw new InvalidOperationException(
+                "No single-overload public method found in ICSharpCode.Decompiler.dll — " +
+                "the test target's API drifted; pick a different assembly or test shape.");
+    }
+
+    /// <summary>
+    /// Find a type in the test target declaring several plain (non-accessor) public methods,
+    /// so a declaring-type filter has something to return and to exclude.
+    /// </summary>
+    private static Type TypeWithSeveralPlainMethods()
+    {
+        var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
+        return assembly.GetExportedTypes()
+            .Where(t => !t.IsGenericType && !t.IsNested)
+            .FirstOrDefault(t => t.GetMethods(PublicDeclared)
+                .Count(m => !m.IsSpecialName) >= 2)
+            ?? throw new InvalidOperationException(
+                "No type with several plain public methods found in ICSharpCode.Decompiler.dll — " +
+                "the test target's API drifted; pick a different assembly or test shape.");
+    }
+
+    /// <summary>
+    /// Find the TASK-24 shape in the test target: a type that declares a method whose name
+    /// also has a <em>different</em> overload declared only on a base type in the same
+    /// assembly (so the base overload is decompilable), and whose parameter types are simple
+    /// enough to express as a decompile_method hint. Returns the derived type, the shared
+    /// method name, and the base-only overload. Discovered rather than hardcoded so the test
+    /// survives upstream API drift.
+    /// </summary>
+    private static (Type Derived, string Name, MethodInfo BaseOverload) MethodWithBaseOnlyOverload()
+    {
+        var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
+
+        static bool IsSimpleParameterType(Type t) =>
+            !t.IsGenericType && !t.IsGenericParameter && !t.IsArray
+            && !t.IsByRef && !t.IsPointer && !t.ContainsGenericParameters;
+
+        foreach (var derived in assembly.GetExportedTypes()
+                     .Where(t => !t.IsNested && !t.IsGenericType))
+        {
+            var declaredByName = derived.GetMethods(PublicDeclared)
+                .Where(m => !m.IsSpecialName && !m.IsGenericMethod)
+                .ToLookup(m => m.Name);
+
+            for (var baseType = derived.BaseType;
+                 baseType != null && baseType != typeof(object);
+                 baseType = baseType.BaseType)
+            {
+                // The base overload must live in the same DLL, else decompile_method can't reach it.
+                if (baseType.Assembly != assembly || baseType.IsNested || baseType.IsGenericType)
+                    continue;
+
+                foreach (var baseMethod in baseType.GetMethods(PublicDeclared)
+                             .Where(m => !m.IsSpecialName && !m.IsGenericMethod
+                                         && m.GetParameters().Length > 0
+                                         && m.GetParameters().All(p => IsSimpleParameterType(p.ParameterType))))
+                {
+                    // The derived type must declare the *name* — that is the short-circuit
+                    // trigger the fix removed.
+                    var siblings = declaredByName[baseMethod.Name].ToList();
+                    if (siblings.Count == 0)
+                        continue;
+
+                    // Require every derived overload of this name to differ in arity from the
+                    // base overload. decompile_method narrows by exact parameter count first, so
+                    // a differing arity guarantees the hint cannot match a derived overload and
+                    // resolution must walk to the base — it also implies the base signature isn't
+                    // redeclared. This tests an arity-differentiated variant of the TASK-24 shape
+                    // rather than the literal same-arity repro, which keeps the discovered target
+                    // robust: a same-arity derived overload could share a parameter's short name
+                    // with the base and match the loose hint, resolving to the wrong level.
+                    var baseArity = baseMethod.GetParameters().Length;
+                    if (siblings.Any(s => s.GetParameters().Length == baseArity))
+                        continue;
+
+                    return (derived, baseMethod.Name, baseMethod);
+                }
+            }
+        }
+
+        throw new InvalidOperationException(
+            "No type declaring a method whose different-signature overload is base-only was found " +
+            "in ICSharpCode.Decompiler.dll — the test target's API drifted; pick a different shape.");
+    }
+
+    /// <summary>
+    /// Calls an ILens MCP tool that is expected to fail, returning the raw result alongside
+    /// its text so a test can assert on both. Unlike <see cref="CallToolText"/> this does not
+    /// fail on an error result — the error <em>is</em> the behavior under test.
+    /// </summary>
+    private async Task<(CallToolResult Result, string Text)> CallToolExpectingError(
+        string toolName, Dictionary<string, object?> arguments)
+    {
+        CallToolResult result = await _server.Client.CallToolAsync(toolName, arguments);
+        string text = string.Join(
+            "\n", result.Content.OfType<TextContentBlock>().Select(block => block.Text));
+        return (result, text);
     }
 
     /// <summary>

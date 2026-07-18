@@ -112,7 +112,7 @@
     <span class="logo"><svg xmlns="http://www.w3.org/2000/svg" version="1.2" baseProfile="tiny" viewBox="0 0 48 48"><polygon points="24,8 40,24 24,40 8,24" fill="#080" stroke="#0c0" stroke-width="1" stroke-linejoin="round"/><polygon points="8,8 40,8 24,24" fill="#c0c" stroke="#e8e" stroke-width="1" stroke-linejoin="round"/></svg></span>
     <div class="header-text">
       <h1>ILens</h1>
-      <div class="version">Version 7</div>
+      <div class="version">Version 8</div>
       <div class="tagline">MCP server for inspecting .NET assemblies</div>
     </div>
   </div>
@@ -155,7 +155,7 @@
 <tr><td>Find which types expose a given method</td><td class="num">1,041,476 tokens</td><td><code>find_methods</code></td><td class="num">618 tokens</td></tr>
 </tbody>
 </table>
-<p class="muted">Measured against <code>ICSharpCode.Decompiler.dll</code> 9.1.0.7988 (about 2&nbsp;MB, 741 public types) on 2026-06-23; token figures are character counts divided by 4, not a real tokenizer. The <code>ilspycmd</code> column is the same full-file dump on every row — every targeted task otherwise starts from that same whole-assembly cost.</p>
+<p class="muted">Measured against <code>ICSharpCode.Decompiler.dll</code> 9.1.0.7988 (about 2&nbsp;MB, 741 public types) on 2026-07-18; token figures are character counts divided by 4, not a real tokenizer. The <code>ilspycmd</code> column is the same full-file dump on every row — every targeted task otherwise starts from that same whole-assembly cost.</p>
 <p>ILens turns assembly inspection into bounded, targeted lookups instead of full-file dumps — which is what makes it cheap enough to leave registered as an always-available tool.</p>
 </section>
 
@@ -261,7 +261,7 @@ files directly, or web-searching for source.
 
 <div class="tool">
 <h3>find_methods <span class="badge readonly">read-only</span></h3>
-<p>Search an assembly for methods matching a signature, combining any of: name pattern, return type, parameter types, parameter count, declaring namespace, declaring-type pattern, and accessibility.</p>
+<p>Search an assembly for methods matching a signature, combining any of: name pattern, return type, parameter types, parameter count, declaring namespace, declaring type, declaring-type pattern, and accessibility. To list the methods of one known type, pass <code>declaringType</code> with its fully qualified name — the same form <code>decompile_method</code>'s <code>typeName</code> takes; <code>declaringTypePattern</code> is the looser sibling that matches a substring of the short name.</p>
 <dl class="params">
 <dt>assembly <span class="badge required">required</span></dt><dd><span class="ptype">string</span> — path to the assembly, inside an allow-root.</dd>
 <dt>namePattern <span class="badge optional">optional</span></dt><dd><span class="ptype">string</span> — case-insensitive substring on the method name.</dd>
@@ -269,7 +269,8 @@ files directly, or web-searching for source.
 <dt>parameterTypes <span class="badge optional">optional</span></dt><dd><span class="ptype">string[]</span> — ordered parameter-type patterns; the method must have exactly this many parameters.</dd>
 <dt>parameterCount <span class="badge optional">optional</span></dt><dd><span class="ptype">int?</span> — exact parameter count; must agree with <code>parameterTypes</code> if both are given.</dd>
 <dt>declaringNamespace <span class="badge optional">optional</span></dt><dd><span class="ptype">string</span> — exact declaring namespace.</dd>
-<dt>declaringTypePattern <span class="badge optional">optional</span></dt><dd><span class="ptype">string</span> — case-insensitive substring on the declaring type's short name.</dd>
+<dt>declaringType <span class="badge optional">optional</span></dt><dd><span class="ptype">string</span> — exact fully qualified declaring type, e.g. <code>System.IO.File</code>; nested types take <code>+</code> or <code>.</code>. Errors if no such type exists, because an exact name asserts the type is real. Mutually exclusive with <code>declaringTypePattern</code>.</dd>
+<dt>declaringTypePattern <span class="badge optional">optional</span></dt><dd><span class="ptype">string</span> — case-insensitive substring on the declaring type's short name. Matching nothing is a legitimate empty result here, unlike <code>declaringType</code>.</dd>
 <dt>accessibility <span class="badge optional">optional</span></dt><dd><span class="ptype">Public | PublicProtected | All</span> — default <code>PublicProtected</code>.</dd>
 <dt>limit <span class="badge optional">optional</span></dt><dd><span class="ptype">int?</span> — cap on result lines; default 50.</dd>
 </dl>
@@ -279,6 +280,8 @@ files directly, or web-searching for source.
 <li>Assembly path outside the allow-roots, or the file is missing.</li>
 <li>Assembly larger than the memory budget.</li>
 <li><code>parameterCount</code> contradicts <code>parameterTypes.Length</code>.</li>
+<li><code>declaringType</code> and <code>declaringTypePattern</code> both supplied — they are mutually exclusive.</li>
+<li><code>declaringType</code> names a type that does not exist: <code>Type not found: &lt;name&gt;</code>.</li>
 </ul>
 <p class="seealso"><strong>See also:</strong> <code>list_members</code>, <code>analyze</code>.</p>
 </div>
@@ -439,11 +442,13 @@ files directly, or web-searching for source.
 <dt>parameterCount <span class="badge optional">optional</span></dt><dd><span class="ptype">int?</span> — disambiguates overloads by arity.</dd>
 <dt>parameterTypes <span class="badge optional">optional</span></dt><dd><span class="ptype">string[]</span> — disambiguates same-arity overloads by type (loose matching, like <code>find_methods</code>).</dd>
 </dl>
-<p><strong>Returns.</strong> A header comment naming the method and its origin, followed by the decompiled C# source.</p>
+<p>A hint is a <em>filter that must be satisfied</em>, not a tie-breaker consulted only when several overloads compete: a lone candidate that does not match the hint is rejected rather than returned, so the tool never answers with a different overload than the one asked for. Because C# overload resolution spans the inheritance chain, a hint is matched at each level of the declared → base walk, so an overload declared only on a base type still resolves; the most-derived match wins, so an override resolves to the derived declaration.</p>
+<p><strong>Returns.</strong> A header comment carrying the resolved signature — <code>// Type.Method(paramTypes) → ReturnType</code>, plus an origin note when the method is inherited or an extension — followed by the decompiled C# source. The signature is included so a caller can confirm which overload came back.</p>
 <p><strong>Errors.</strong></p>
 <ul>
 <li>Assembly path outside the allow-roots, or the file is missing.</li>
 <li>Type not found, or the method not found on the type, its base types, or as an extension method.</li>
+<li>No overload matches the supplied hint: <code>No overload of 'X' on Y matches …</code>, followed by <code>Available:</code> listing every same-named overload found across the inheritance chain.</li>
 <li>The hints do not narrow to exactly one overload — the candidates are listed.</li>
 <li><code>parameterCount</code> contradicts <code>parameterTypes.Length</code>.</li>
 <li>Assembly larger than the memory budget.</li>
@@ -558,6 +563,8 @@ files directly, or web-searching for source.
 <li><strong>"exceeds … budget"</strong> — the assembly alone is larger than the total memory budget. Raise it with <code>--max-total-size &lt;MB&gt;</code>.</li>
 <li><strong><code>Type not found</code> / <code>Method not found</code></strong> — the fully qualified name is wrong or the member lives elsewhere. Use <code>search_types</code> or <code>list_types</code> to find the exact name, and <code>list_members</code> or <code>find_methods</code> for members.</li>
 <li><strong>"has N matching overloads" / ambiguity</strong> — narrow a method with <code>parameterCount</code> or <code>parameterTypes</code>; for an indexer, use <code>decompile_method</code> on <code>get_Item</code> / <code>set_Item</code>.</li>
+<li><strong><code>No overload of '…' matches …</code></strong> — a <code>parameterCount</code> / <code>parameterTypes</code> hint is a filter that must be satisfied, so a signature that does not exist is reported rather than silently answered with a different overload. The <code>Available:</code> list names every same-named overload found across the inheritance chain — re-query with one of those signatures. An accurate "no such overload" is often itself the answer (for example, proving a type does not override a method).</li>
+<li><strong><code>Unknown argument '…' for tool '…'. Valid arguments: …</code></strong> — an argument name the tool does not declare was supplied. Unrecognized arguments are rejected rather than ignored, because a silently dropped filter would return an unfiltered result that looks like a real answer. Re-send using one of the names listed in the message.</li>
 <li><strong><code>Analysis kind '…' is not valid for …</code></strong> — the chosen <code>analyze</code> kind doesn't apply to that symbol category. Pick one from the valid set for the category.</li>
 <li><strong><code>Unknown format '…'</code> (compare_method)</strong> — <code>format</code> must be <code>csharp</code> or <code>il</code>.</li>
 </ul>
@@ -612,7 +619,7 @@ files directly, or web-searching for source.
 
 <section id="colophon">
 <h2>Version, source, license</h2>
-<p>This guide documents ILens version 7. ILens is released under the MIT License. The release bundles a <code>third-party-licenses/INDEX.md</code> mapping every NuGet package and runtime component to its upstream license, alongside the per-source license texts.</p>
+<p>This guide documents ILens version 8. ILens is released under the MIT License. The release bundles a <code>third-party-licenses/INDEX.md</code> mapping every NuGet package and runtime component to its upstream license, alongside the per-source license texts.</p>
 <p>Source and issue tracker: <a href="https://github.com/tadis174/ILens">github.com/tadis174/ILens</a>.</p>
 </section>
 

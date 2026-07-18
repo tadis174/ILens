@@ -109,7 +109,11 @@ builder.Services
             Name = "ILens",
             Version = ilensVersion
         };
+        // Order matters: the SDK wraps its filter pipeline back-to-front, so the
+        // first-registered filter is the outermost. ToolErrorFilter must stay first
+        // to catch and format what UnknownArgumentFilter throws.
         ToolErrorFilter.Install(options);
+        UnknownArgumentFilter.Install(options);
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly();

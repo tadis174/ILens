@@ -12,7 +12,7 @@ The default fallback for an AI agent inspecting a compiled .NET assembly is to s
 | See the API surface of one mid-sized class | 1,041,476 tokens | `summarize_type` | 895 tokens |
 | Find which types expose a given method | 1,041,476 tokens | `find_methods` | 618 tokens |
 
-*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-06-23; token figures are character counts divided by 4, not a real tokenizer.*
+*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-07-18; token figures are character counts divided by 4, not a real tokenizer.*
 
 ILens turns assembly inspection into bounded, targeted lookups: list types in a namespace, summarize one type's public surface, find methods by name, decompile a single method body, run cross-reference analysis (callers, overrides, implementations, extension methods, attribute usage). Each call returns a focused response — making it cheap enough to leave registered as an always-available tool.
 

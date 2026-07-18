@@ -68,6 +68,26 @@ public static class ReferenceFormatter
         string.Join(", ", methods.Select(FormatMethodReference));
 
     /// <summary>
+    /// Format a resolved method as a full signature — parameter types and return type —
+    /// anchored on a caller-supplied declaring-type name, e.g.
+    /// <c>Verse.Thing.Equals(Thing) → bool</c>.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="FormatMethodReference"/> this does not use the method's own
+    /// <c>DeclaringType</c>: <c>decompile_method</c> anchors its header on the type the
+    /// caller asked about, and reports an inherited or extension origin separately. The
+    /// return type is included because it is part of what distinguishes the overload that
+    /// resolution actually picked — a bare <c>// Verse.Thing.Equals</c> header is ambiguous
+    /// by construction, and would let a caller mistake one overload for another.
+    /// </remarks>
+    public static string FormatResolvedSignature(IMethod method, string declaringTypeName)
+    {
+        var parameters = string.Join(", ",
+            method.Parameters.Select(p => FormatTypeRef(p.Type)));
+        return $"{declaringTypeName}.{method.Name}({parameters}) → {FormatTypeRef(method.ReturnType)}";
+    }
+
+    /// <summary>
     /// Render an <see cref="IType"/> as a compact C#-style type reference,
     /// recursively unfolding generics and arrays. Uses C# keywords for the
     /// well-known framework types (e.g., <c>float</c>, <c>string</c>) and

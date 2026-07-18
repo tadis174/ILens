@@ -13,7 +13,10 @@ public static class FindMethodsTool
     [McpServerTool(Name = "find_methods", ReadOnly = true),
      Description("Search the assembly for methods matching a signature. " +
         "Combine any of: name pattern, return type, parameter types, parameter count, " +
-        "declaring namespace, declaring-type pattern, accessibility.\n" +
+        "declaring namespace, declaring type, declaring-type pattern, accessibility.\n" +
+        "To list the methods of one known type, pass declaringType with its fully qualified " +
+        "name (e.g., 'System.IO.File') — the same form decompile_method's typeName takes. " +
+        "declaringTypePattern is the looser sibling: a case-insensitive substring of the short name.\n" +
         "Type patterns match by short name OR full name (e.g., 'String' or 'System.String'). " +
         "Generics are erased at the top level — 'List' matches List<T> for any T. " +
         "Nullable<T> is unwrapped — 'int' matches both 'int' and 'int?'. " +
@@ -30,15 +33,33 @@ public static class FindMethodsTool
         [Description("Optional ordered list of parameter-type patterns. The method must have exactly this many parameters, each matching the pattern at its position.")] string[] parameterTypes = null,
         [Description("Optional exact parameter count. If parameterTypes is also set, the two must agree.")] int? parameterCount = null,
         [Description("Optional exact declaring namespace, e.g. 'System.IO' or 'System.Collections.Generic'.")] string declaringNamespace = null,
+        [Description("Optional exact fully qualified declaring type, e.g. 'System.IO.File'. Nested types take '+' or '.'. Errors if no such type exists. Mutually exclusive with declaringTypePattern.")] string declaringType = null,
         [Description("Optional case-insensitive substring filter on declaring type's short name.")] string declaringTypePattern = null,
         [Description("Accessibility filter. Default: PublicProtected.")] AccessibilityFilter accessibility = AccessibilityFilter.PublicProtected,
         [Description("Cap on result lines. Default 50.")] int? limit = null)
     {
         SymbolResolver.ValidateDisambiguationArgs(parameterCount, parameterTypes);
 
+        if (!string.IsNullOrEmpty(declaringType) && !string.IsNullOrEmpty(declaringTypePattern))
+            throw new ArgumentException(
+                "declaringType and declaringTypePattern are mutually exclusive — " +
+                "declaringType is an exact fully qualified name, declaringTypePattern is a " +
+                "substring of the short name. Pass whichever one you mean.");
+
         var host = registry.GetOrLoad(assembly);
+
+        // Resolve up front so a name that matches no type is an error, not an empty result.
+        // An exact name asserts the type exists, so answering a misspelling with "No methods
+        // match" would read as "that type has no such methods" — a wrong answer wearing the
+        // shape of a right one. A *pattern* matching nothing is a legitimate empty result,
+        // so declaringTypePattern gets no such check.
+        var resolvedDeclaringType = string.IsNullOrEmpty(declaringType)
+            ? null
+            : host.Resolver.ResolveType(declaringType).FullName;
+
         var matches = ScanAssembly(host, namePattern, returns, parameterTypes,
-            parameterCount, declaringNamespace, declaringTypePattern, accessibility);
+            parameterCount, declaringNamespace, resolvedDeclaringType, declaringTypePattern,
+            accessibility);
 
         matches.Sort((a, b) =>
         {
@@ -57,6 +78,7 @@ public static class FindMethodsTool
         string[] parameterTypes,
         int? parameterCount,
         string declaringNamespace,
+        string resolvedDeclaringType,
         string declaringTypePattern,
         AccessibilityFilter accessibility)
     {
@@ -65,6 +87,8 @@ public static class FindMethodsTool
         foreach (var typeDef in host.TypeSystem.MainModule.TypeDefinitions)
         {
             if (declaringNamespace != null && typeDef.Namespace != declaringNamespace)
+                continue;
+            if (resolvedDeclaringType != null && typeDef.FullName != resolvedDeclaringType)
                 continue;
             if (!string.IsNullOrEmpty(declaringTypePattern) &&
                 !typeDef.Name.Contains(declaringTypePattern, StringComparison.OrdinalIgnoreCase))

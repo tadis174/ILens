@@ -25,9 +25,13 @@ public static class DecompileMethodTool
         var type = resolver.ResolveType(typeName);
         var (method, origin) = resolver.ResolveMethod(type, methodName, parameterCount, parameterTypes);
 
+        // The header carries the resolved signature, not the requested name: it must
+        // disclose which overload came back so a caller can spot a mismatch against what
+        // they asked for without being able to read the IL themselves.
+        var signature = ReferenceFormatter.FormatResolvedSignature(method, type.FullName);
         var header = origin.Kind == "declared"
-            ? $"// {type.FullName}.{methodName}"
-            : $"// {type.FullName}.{methodName} {origin.Format()}";
+            ? $"// {signature}"
+            : $"// {signature} {origin.Format()}";
 
         var source = host.DecompileMethod(method);
         return $"{header}\n{source}";
