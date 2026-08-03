@@ -12,7 +12,9 @@ using ModelContextProtocol;
 var ilensVersion = Assembly.GetExecutingAssembly()
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
     ?? "unknown";
-// Strip any "+commit" suffix that .NET may append; we only ship the semver.
+// Strip any "+commit" suffix; we only ship the semver. csproj disables
+// IncludeSourceRevisionInInformationalVersion, so nothing should append one —
+// this stays as a guard in case that property is ever turned back on.
 var plusIdx = ilensVersion.IndexOf('+');
 if (plusIdx >= 0) ilensVersion = ilensVersion.Substring(0, plusIdx);
 
@@ -111,9 +113,11 @@ builder.Services
         };
         // Order matters: the SDK wraps its filter pipeline back-to-front, so the
         // first-registered filter is the outermost. ToolErrorFilter must stay first
-        // to catch and format what UnknownArgumentFilter throws.
+        // to catch and format what the others throw, and argument names must be
+        // validated before ArrayCoercionFilter rewrites any of their values.
         ToolErrorFilter.Install(options);
         UnknownArgumentFilter.Install(options);
+        ArrayCoercionFilter.Install(options);
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly();

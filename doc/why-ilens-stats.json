@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "measuredAtUtc": "2026-07-18",
+  "measuredAtUtc": "2026-08-03",
   "charsPerToken": 4,
-  "ilensVersion": "8",
+  "ilensVersion": "9",
   "target": {
     "assembly": "ICSharpCode.Decompiler.dll",
     "version": "9.1.0.7988",

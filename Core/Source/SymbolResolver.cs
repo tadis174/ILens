@@ -125,12 +125,78 @@ public sealed class SymbolResolver
                 $"Member '{memberName}' not found on {type.FullName}, its base types, " +
                 "or as an extension method.");
 
+        // The ordinary C# event declaration compiles to an event *and* a private field of
+        // the same name holding the subscriber list, so the cross-kind probe reports every
+        // one of them as a collision. That is not the collision this check exists for: the
+        // pair has a fixed compiler-generated shape, and only the event was ever written in
+        // source. Resolve to the event — otherwise no field-like event is addressable by
+        // name at all, which silently rules out the common case.
+        var collapsed = CollapseFieldLikeEvent(matches);
+        if (collapsed.HasValue)
+            return collapsed.Value;
+
         // More than one kind matched — the name collides across member kinds.
         var kinds = string.Join(", ", matches.Select(m => m.Category));
         throw new ArgumentException(
             $"Member '{memberName}' on {type.FullName} is ambiguous — it exists as " +
             $"more than one member kind ({kinds}). Re-query with a kind-specific tool, " +
             "or pass a parameterCount / parameterTypes hint if you mean the method.");
+    }
+
+    /// <summary>
+    /// Collapse a field/event pair to the event when the field is that event's backing
+    /// store, or <c>null</c> for anything else — so a name genuinely reused across metadata
+    /// tables still reports as ambiguous.
+    /// </summary>
+    private static (ISymbol, MemberOrigin, SymbolCategory)? CollapseFieldLikeEvent(
+        List<(ISymbol Symbol, MemberOrigin Origin, SymbolCategory Category)> matches)
+    {
+        if (matches.Count != 2)
+            return null;
+
+        var evt = matches.FirstOrDefault(m => m.Category == SymbolCategory.Event);
+        var field = matches.FirstOrDefault(m => m.Category == SymbolCategory.Field);
+        if (evt.Symbol is not IEvent e || field.Symbol is not IField f)
+            return null;
+
+        return IsBackingFieldOf(f, e) ? evt : null;
+    }
+
+    /// <summary>
+    /// The field holding a field-like event's subscriber list, or <c>null</c> when the event
+    /// declares its accessors explicitly and so has no such field.
+    /// </summary>
+    public static IField BackingFieldOf(IEvent evt) =>
+        evt.DeclaringTypeDefinition?.Fields.FirstOrDefault(f => IsBackingFieldOf(f, evt));
+
+    /// <summary>
+    /// True if <paramref name="field"/> is the subscriber list the compiler emitted for
+    /// <paramref name="evt"/>: same declaring type and name, private, static exactly when the
+    /// event is, and typed as the event's delegate.
+    /// </summary>
+    /// <remarks>
+    /// Matching the whole shape is what keeps this from claiming an unrelated same-named
+    /// field — an obfuscator would have to reproduce every part of it, at which point the two
+    /// are indistinguishable anyway. Requiring the field to carry the event's own name is
+    /// deliberate: VB.NET emits it as <c>XEvent</c>, so only the C# form is recognized, which
+    /// is what ILens targets.
+    ///
+    /// Type identity goes through <c>ReflectionName</c> rather than <c>IType.Equals</c>.
+    /// ILens is routinely pointed at an assembly whose references cannot be resolved — that
+    /// is the normal case for a decompiled game or mod DLL — and a type from an unresolvable
+    /// reference comes back as a distinct unknown-type instance per resolution site, so the
+    /// field's type and the event's delegate type compare unequal despite naming the same
+    /// type. The name is what survives that.
+    /// </remarks>
+    private static bool IsBackingFieldOf(IField field, IEvent evt)
+    {
+        var declaringType = evt.DeclaringTypeDefinition;
+        return declaringType != null
+            && field.DeclaringTypeDefinition?.FullName == declaringType.FullName
+            && field.Name == evt.Name
+            && field.Accessibility == Accessibility.Private
+            && field.IsStatic == evt.IsStatic
+            && field.Type.ReflectionName == evt.ReturnType.ReflectionName;
     }
 
     /// <summary>

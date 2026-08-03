@@ -7,6 +7,15 @@ namespace ILens;
 /// Single source of truth mapping <see cref="AnalysisKind"/> values to the ILSpyX
 /// analyzer header they trigger and the symbol categories they accept.
 /// </summary>
+/// <remarks>
+/// <see cref="HeaderFor"/> is the header a kind <em>displays</em> under, and for most
+/// (kind, category) pairs it is also the analyzer that produces the result. Two families
+/// are synthesized by <c>analyze</c> instead, because ILSpyX exports no analyzer for
+/// them: <see cref="AnalysisKind.ImplementedBy"/> on a type, and every usage kind on a
+/// property or event — those route to the accessors, and for a field-like event also to
+/// the field holding its subscriber list. The table still governs which pairs are
+/// <em>accepted</em>; only the execution differs.
+/// </remarks>
 public static class AnalysisDispatch
 {
     private sealed record Spec(string Header, IReadOnlySet<SymbolCategory> Applies);
@@ -14,17 +23,17 @@ public static class AnalysisDispatch
     private static readonly IReadOnlyDictionary<AnalysisKind, Spec> _table =
         new Dictionary<AnalysisKind, Spec>
         {
-            [AnalysisKind.UsedBy]           = new("Used By",           Set(SymbolCategory.Type, SymbolCategory.Method)),
+            [AnalysisKind.UsedBy]           = new("Used By",           Set(SymbolCategory.Type, SymbolCategory.Method, SymbolCategory.Property, SymbolCategory.Event)),
             [AnalysisKind.InstantiatedBy]   = new("Instantiated By",   Set(SymbolCategory.Type)),
             [AnalysisKind.ExposedBy]        = new("Exposed By",        Set(SymbolCategory.Type)),
             [AnalysisKind.ExtensionMethods] = new("Extension Methods", Set(SymbolCategory.Type)),
             [AnalysisKind.AppliedTo]        = new("Applied To",        Set(SymbolCategory.Type)),
             [AnalysisKind.OverriddenBy]     = new("Overridden By",     Set(SymbolCategory.Method, SymbolCategory.Property, SymbolCategory.Event)),
             [AnalysisKind.ImplementedBy]    = new("Implemented By",    Set(SymbolCategory.Type, SymbolCategory.Method, SymbolCategory.Property, SymbolCategory.Event)),
-            [AnalysisKind.Uses]             = new("Uses",              Set(SymbolCategory.Method)),
+            [AnalysisKind.Uses]             = new("Uses",              Set(SymbolCategory.Method, SymbolCategory.Property)),
             [AnalysisKind.Implements]       = new("Implements",        Set(SymbolCategory.Method)),
-            [AnalysisKind.ReadBy]           = new("Read By",           Set(SymbolCategory.Field)),
-            [AnalysisKind.AssignedBy]       = new("Assigned By",       Set(SymbolCategory.Field)),
+            [AnalysisKind.ReadBy]           = new("Read By",           Set(SymbolCategory.Field, SymbolCategory.Property)),
+            [AnalysisKind.AssignedBy]       = new("Assigned By",       Set(SymbolCategory.Field, SymbolCategory.Property)),
         };
 
     private static readonly IReadOnlyDictionary<SymbolCategory, IReadOnlyList<AnalysisKind>>

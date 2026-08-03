@@ -8,7 +8,7 @@
 # Submission: see /publish skill Step 12 for the wingetcreate command.
 
 PackageIdentifier: Tadis.ILens
-PackageVersion: 9
+PackageVersion: 10
 InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
@@ -16,7 +16,7 @@ NestedInstallerFiles:
     PortableCommandAlias: ilens
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/tadis174/ILens/releases/download/v9/ILens-windows-x64.zip
+    InstallerUrl: https://github.com/tadis174/ILens/releases/download/v10/ILens-windows-x64.zip
     InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
 ReleaseDate: 2026-01-01
 ManifestType: installer

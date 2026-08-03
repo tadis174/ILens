@@ -532,6 +532,238 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     }
 
     [Fact]
+    public async Task Analyze_ReadBy_OnAProperty_MatchesTheGetterCallers()
+    {
+        // ILSpyX has no property-level usage analyzer, so analyze routes a property
+        // read/assign/use query to the accessor and runs "Used By" there. Asserting the
+        // two routes agree pins the behavior without hard-coding call sites that drift
+        // as the upstream package moves.
+        string viaProperty = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["memberName"] = "ThrowOnAssemblyResolveErrors",
+            ["kind"] = "ReadBy",
+        });
+        string viaAccessor = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["memberName"] = "get_ThrowOnAssemblyResolveErrors",
+            ["kind"] = "UsedBy",
+        });
+
+        Assert.Equal(ResultBody(viaAccessor), ResultBody(viaProperty));
+        // The header names the accessor consulted, so the substitution is visible in the
+        // output rather than silent — and the accessor route stays discoverable from it.
+        Assert.Contains("(via get_ThrowOnAssemblyResolveErrors)", viaProperty);
+    }
+
+    [Fact]
+    public async Task Analyze_UsedBy_OnAProperty_CoversBothAccessors()
+    {
+        string text = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["memberName"] = "ThrowOnAssemblyResolveErrors",
+            ["kind"] = "UsedBy",
+        });
+        Assert.Contains(
+            "(via get_ThrowOnAssemblyResolveErrors, set_ThrowOnAssemblyResolveErrors)", text);
+
+        // Every reader must also appear in the union — UsedBy merges the two accessor
+        // runs rather than replacing one with the other.
+        string readers = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["memberName"] = "ThrowOnAssemblyResolveErrors",
+            ["kind"] = "ReadBy",
+        });
+        // Skip the empty-result sentinel: were upstream drift to leave the getter with no
+        // callers, asserting that "(no results)" appears in a non-empty union would fail
+        // for a reason that has nothing to do with the merge being tested.
+        string readerBody = ResultBody(readers);
+        if (readerBody.Trim() != "(no results)")
+        {
+            foreach (string caller in readerBody.Split('\n'))
+                Assert.Contains(caller, text);
+        }
+    }
+
+    [Fact]
+    public async Task Analyze_Uses_OnAProperty_MatchesTheUnionOfItsAccessors()
+    {
+        // Uses is the one outgoing question, so it stays Uses on the way down to the
+        // accessors instead of becoming UsedBy like the incoming kinds. Comparing against
+        // the getter run directly pins that without hard-coding call sites that drift.
+        string viaProperty = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["memberName"] = "ThrowOnAssemblyResolveErrors",
+            ["kind"] = "Uses",
+        });
+        string viaGetter = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["memberName"] = "get_ThrowOnAssemblyResolveErrors",
+            ["kind"] = "Uses",
+        });
+
+        Assert.Contains(
+            "(via get_ThrowOnAssemblyResolveErrors, set_ThrowOnAssemblyResolveErrors)", viaProperty);
+        string getterBody = ResultBody(viaGetter);
+        if (getterBody.Trim() != "(no results)")
+        {
+            foreach (string used in getterBody.Split('\n'))
+                Assert.Contains(used, viaProperty);
+        }
+    }
+
+    [Fact]
+    public async Task Analyze_Uses_OnAnEvent_ReturnsError()
+    {
+        // Uses is offered for properties but not events: a field-like event's accessors are
+        // compiler-generated, so the answer would be the subscriber-list bookkeeping rather
+        // than anything written in source. The error names the kinds that do apply.
+        CallToolResult result = await _server.Client.CallToolAsync("analyze",
+            new Dictionary<string, object?>
+            {
+                ["assembly"] = _server.AssemblyPath,
+                ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
+                ["memberName"] = "PropertyChanged",
+                ["kind"] = "Uses",
+            });
+
+        string text = string.Join(
+            "\n", result.Content.OfType<TextContentBlock>().Select(b => b.Text));
+        Assert.True(result.IsError, $"Expected Uses-on-event rejection, got: {text}");
+        Assert.Contains("not valid for Event", text);
+        Assert.Contains("UsedBy", text);
+    }
+
+    [Fact]
+    public async Task Analyze_AssignedBy_OnAReadOnlyProperty_ReturnsError()
+    {
+        // CSharpDecompiler.TypeSystem declares no setter, so "who assigns it?" is a
+        // question about an accessor that does not exist. An empty result would be true
+        // but unreadable — indistinguishable from a settable property nobody writes.
+        CallToolResult result = await _server.Client.CallToolAsync("analyze",
+            new Dictionary<string, object?>
+            {
+                ["assembly"] = _server.AssemblyPath,
+                ["typeName"] = "ICSharpCode.Decompiler.CSharp.CSharpDecompiler",
+                ["memberName"] = "TypeSystem",
+                ["kind"] = "AssignedBy",
+            });
+
+        string text = string.Join(
+            "\n", result.Content.OfType<TextContentBlock>().Select(b => b.Text));
+        Assert.True(result.IsError,
+            $"Expected AssignedBy-on-read-only-property rejection, got: {text}");
+        Assert.Contains("read-only", text);
+        Assert.Contains("setter", text);
+    }
+
+    [Fact]
+    public async Task Analyze_UsedBy_OnAnEvent_RoutesThroughItsAccessors()
+    {
+        // DecompilerSettings implements INotifyPropertyChanged, so PropertyChanged is a
+        // build-guaranteed event on the test target. An event has no read/assign split —
+        // subscribing, unsubscribing and raising are all "use" — so UsedBy unions every
+        // accessor it declares. A field-like event has add and remove but no invoke, and
+        // its raise sites read the subscriber list rather than calling an accessor, so the
+        // backing field is part of the route.
+        string text = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["memberName"] = "PropertyChanged",
+            ["kind"] = "UsedBy",
+        });
+        Assert.Contains(
+            "(via add_PropertyChanged, remove_PropertyChanged, the subscriber list)", text);
+        // OnPropertyChanged raises the event, so the union must reach past the subscribers.
+        Assert.Contains("OnPropertyChanged", text);
+        // The add and remove accessors touch the subscriber list by construction, and ILSpyX
+        // reports a use inside an accessor under the event that owns it — so without the
+        // self-reference filter the event appears in its own result list.
+        foreach (string line in ResultBody(text).Split('\n'))
+            Assert.NotEqual("ICSharpCode.Decompiler.DecompilerSettings.PropertyChanged", line);
+    }
+
+    [Fact]
+    public async Task Analyze_OnAFieldLikeEvent_DoesNotReportACrossKindCollision()
+    {
+        // `public event EventHandler X;` compiles to an event plus a private field of the
+        // same name holding the subscriber list. The cross-kind probe in SymbolResolver sees
+        // both and would call the name ambiguous, which would leave the ordinary C# event
+        // unaddressable by name — including for the OverriddenBy/ImplementedBy kinds that
+        // predate the usage routing.
+        string text = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["memberName"] = "PropertyChanged",
+            ["kind"] = "OverriddenBy",
+        });
+        Assert.DoesNotContain("ambiguous", text);
+        Assert.Contains("PropertyChanged", text);
+    }
+
+    [Fact]
+    public async Task ListMembers_AcceptsAScalarWhereTheSchemaDeclaresAnArray()
+    {
+        // "Field" instead of ["Field"] is a routine slip, and the SDK's binder answers it
+        // with a raw serializer failure naming an internal type. There is only one thing a
+        // lone value can mean, so ArrayCoercionFilter promotes it — the two calls must be
+        // indistinguishable.
+        // DecompilerSettings exposes no public or protected field of its own, so widen the
+        // accessibility filter — otherwise both calls agree on "no members match" and the
+        // comparison proves nothing about which kinds were selected.
+        var arguments = new Dictionary<string, object?>
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["accessibility"] = "All",
+        };
+        string scalar = await CallToolText("list_members",
+            new(arguments) { ["kinds"] = "Field" });
+        string array = await CallToolText("list_members",
+            new(arguments) { ["kinds"] = new[] { "Field" } });
+
+        Assert.Equal(array, scalar);
+        // Match the section headers, not the bare words — a field named "anonymousMethods"
+        // contains "Methods" and would make a looser check pass for the wrong reason.
+        Assert.Contains("\nFields (", scalar);
+        Assert.DoesNotContain("\nMethods (", scalar);
+    }
+
+    [Fact]
+    public async Task FindMethods_AcceptsAScalarParameterType()
+    {
+        // The coercion is driven by each tool's own input schema, not by a list of known
+        // parameters, so it has to hold for a string[] on a different tool too.
+        var arguments = new Dictionary<string, object?>
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["declaringType"] = "ICSharpCode.Decompiler.DecompilerSettings",
+        };
+        string scalar = await CallToolText("find_methods",
+            new(arguments) { ["parameterTypes"] = "string" });
+        string array = await CallToolText("find_methods",
+            new(arguments) { ["parameterTypes"] = new[] { "string" } });
+
+        Assert.Equal(array, scalar);
+        // Two identical "no matches" replies would also be equal, so require that the
+        // filter actually selected something.
+        Assert.DoesNotContain("No methods match", scalar);
+    }
+
+    [Fact]
     public async Task DecompileProperty_OnAKnownProperty_ReturnsPropertyDeclaration()
     {
         // ThrowOnAssemblyResolveErrors is the same stable public property that
@@ -969,6 +1201,19 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             "\n", result.Content.OfType<TextContentBlock>().Select(block => block.Text));
         Assert.True(result.IsError != true, $"Tool '{toolName}' returned an error: {text}");
         return text;
+    }
+
+    /// <summary>
+    /// The result lines of an <c>analyze</c> response, with its header line dropped. Lets
+    /// two routes to the same cross-references be compared without the headers — which name
+    /// the symbol asked about, and so differ by construction — forcing a mismatch.
+    /// </summary>
+    private static string ResultBody(string analyzeOutput)
+    {
+        int firstBreak = analyzeOutput.IndexOf('\n');
+        Assert.True(firstBreak >= 0,
+            $"Expected an analyze header line followed by results, got: {analyzeOutput}");
+        return analyzeOutput[(firstBreak + 1)..];
     }
 
     /// <summary>

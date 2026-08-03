@@ -5,7 +5,24 @@
     <AssemblyName>ILens</AssemblyName>
     <RootNamespace>ILens</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>9</Version>
+    <Version>10</Version>
+    <!-- .NET appends the git commit SHA to AssemblyInformationalVersion by default,
+         which makes the binary differ on every commit even when no source changed.
+         Two things make that worthless here. The runtime strips the suffix before
+         anyone sees it (see Program.cs), and the release flow builds the binary in
+         _ILensReleaseFlow step 3 but squashes the history in /publish step 6 — so the
+         embedded SHA names a commit that no longer exists once the release lands.
+         Turning it off buys a release binary that is reproducible from its source,
+         which is what field-test.ps1 -Verify compares against. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- SourceLink writes the commit into the PDB, and the PDB's identity is stamped
+         into ILens.dll's debug directory — so the assembly changes on every commit even
+         when no source did, which closed the field-test gate on identical code. Nothing
+         is lost by disabling it: SourceLink exists so a debugger can fetch matching
+         source from GitHub, and the release flow deletes ILens.pdb from Build/dist/, so
+         no consumer ever receives a PDB to source-link from. Local PDBs are unaffected;
+         DebugType=none would also make the build stable but at the cost of losing them. -->
+    <EnableSourceLink>false</EnableSourceLink>
     <!-- This project lives in Core/. Repo-root-relative paths in the release
          flow below resolve against $(_RepoRoot), not $(MSBuildThisFileDirectory). -->
     <_RepoRoot>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)..'))</_RepoRoot>
