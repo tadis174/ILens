@@ -17,11 +17,22 @@ public sealed class ILensServerFixture : IAsyncLifetime
     /// </summary>
     public string AssemblyPath { get; private set; } = null!;
 
+    /// <summary>
+    /// The runtime's System.Private.CoreLib.dll, the inspection target for type shapes
+    /// ICSharpCode.Decompiler.dll does not show: it defines System.ValueTuple itself, so ILSpy
+    /// reads a tuple in its signatures as a tuple type, and it declares function pointers.
+    /// </summary>
+    public string CoreLibPath { get; } = typeof(object).Assembly.Location;
+
+    /// <summary>The directories the server was started with as allow-roots.</summary>
+    public IReadOnlyList<string> AllowRoots { get; private set; } = [];
+
     public async Task InitializeAsync()
     {
         // ILens may load assemblies only from under an --allow-root directory. The
         // test output directory is both that root and where the ICSharpCode.Decompiler
-        // package reference dropped the DLL the tests point ILens at.
+        // package reference dropped the DLL the tests point ILens at. The runtime
+        // directory is the second root, for the tests that inspect CoreLib.
         string allowRoot = AppContext.BaseDirectory;
         AssemblyPath = Path.Combine(allowRoot, "ICSharpCode.Decompiler.dll");
         if (!File.Exists(AssemblyPath))
@@ -29,11 +40,12 @@ public sealed class ILensServerFixture : IAsyncLifetime
                 $"Inspection target not found: {AssemblyPath}. The ICSharpCode.Decompiler " +
                 "package reference in Tests.csproj is expected to place it in the test output.");
 
+        AllowRoots = [allowRoot, Path.GetDirectoryName(CoreLibPath)!];
         var transport = new StdioClientTransport(new StdioClientTransportOptions
         {
             Name = "ILens",
             Command = ResolveILensExecutable(),
-            Arguments = ["--allow-root", allowRoot],
+            Arguments = [.. AllowRoots.SelectMany(root => new[] { "--allow-root", root })],
         });
         Client = await McpClient.CreateAsync(transport);
     }
@@ -72,6 +84,22 @@ public sealed class ILensServerFixture : IAsyncLifetime
         return candidate ?? throw new InvalidOperationException(
             "No ILens executable found. Set ILENS_E2E_EXE, build Core " +
             "(dotnet build Core/Core.csproj -c Release), or run the suite via Tests/run-test.ps1.");
+    }
+
+    /// <summary>
+    /// Deletes the folder of a test that started a server of its own, once that server lets go of
+    /// its files. The server can still hold a reference it mapped for a moment after the client is
+    /// disposed, so the delete is retried for up to five seconds. It never throws: an exception
+    /// here would hide the assertion that failed.
+    /// </summary>
+    public static async Task DeleteWhenReleased(string root)
+    {
+        for (int attempt = 0; attempt < 50 && Directory.Exists(root); attempt++)
+        {
+            try { Directory.Delete(root, recursive: true); }
+            catch (IOException) { await Task.Delay(100); }
+            catch (UnauthorizedAccessException) { await Task.Delay(100); }
+        }
     }
 
     /// <summary>Walks up from the test output directory to the directory holding ILens.sln.</summary>

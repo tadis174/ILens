@@ -8,17 +8,17 @@ The default fallback for an AI agent inspecting a compiled .NET assembly is to s
 
 | Task | `ilspycmd` cost | ILens tool | ILens cost |
 |------|----------------:|------------|-----------:|
-| List the public types in a namespace | 1,041,476 tokens | `list_types` | 1,196 tokens |
-| See the API surface of one mid-sized class | 1,041,476 tokens | `summarize_type` | 895 tokens |
-| Find which types expose a given method | 1,041,476 tokens | `find_methods` | 618 tokens |
+| List the public types in a namespace | 1,041,476 tokens | `find_types` | 1,101 tokens |
+| See the API surface of one mid-sized class | 1,041,476 tokens | `list_members` | 554 tokens |
+| Find which types expose a given method | 1,041,476 tokens | `find_methods` | 518 tokens |
 
-*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-08-03; token figures are character counts divided by 4, not a real tokenizer.*
+*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-10-09; token figures are character counts divided by 4, not a real tokenizer.*
 
-ILens turns assembly inspection into bounded, targeted lookups: list types in a namespace, summarize one type's public surface, find methods by name, decompile a single method body, run cross-reference analysis (callers, overrides, implementations, extension methods, attribute usage). Each call returns a focused response — making it cheap enough to leave registered as an always-available tool.
+ILens turns assembly inspection into bounded, targeted lookups: list types in a namespace, list one type's members without bodies, find methods by name, decompile a single method body, run cross-reference analysis (callers, overrides, implementations, extension methods, attribute usage). Each call returns a focused response — making it cheap enough to leave registered as an always-available tool.
 
 ## Scope
 
-ILens is built for inspecting **C# assemblies**, and its output is C#. The metadata-driven tools (`list_types`, `search_types`, `list_members`, `find_methods`, `analyze`) read language-agnostic metadata and work on an assembly from any .NET language. The decompiling tools (`decompile_type`, `decompile_method`, `decompile_property`, `decompile_event`, `summarize_type`) always emit C# — for an assembly compiled from F#, VB.NET, or C++/CLI they still run, but constructs without a C# equivalent may render unfaithfully.
+ILens is built for inspecting **C# assemblies**, and its output is C#. The metadata-driven tools (`find_types`, `find_methods`, `list_members`, `analyze`) read language-agnostic metadata and work on an assembly from any .NET language. `decompile` and `analyze`'s `call_sites` kind always emit C# — for an assembly compiled from F#, VB.NET, or C++/CLI they still run, but constructs without a C# equivalent may render unfaithfully.
 
 ## Built on ILSpy
 
@@ -59,51 +59,33 @@ Add an entry to `.mcp.json` in your project root. The installer adds `ilens` to 
 }
 ```
 
-Each `--allow-root` flag adds a directory tree from which assemblies may be loaded. **Without any `--allow-root` flags, the server cannot load any assemblies.** Tool calls supply the assembly path per request; the server validates that the path is inside one of the configured roots, rejects path traversal (`..`), resolves symbolic links and junctions before re-checking containment, and bounds total memory with an aggregate budget (default 200 MB, `--max-total-size <MB>`).
+Each `--allow-root` flag adds a directory tree from which assemblies may be loaded. **Without any `--allow-root` flags, the server cannot load any assemblies.** Tool calls supply the assembly path per request; the server validates that the path is inside one of the configured roots, rejects path traversal (`..`), resolves symbolic links and junctions before re-checking containment, and keeps its memory within a budget (default 200 MB, `--max-total-size <MB>`) by closing the assemblies used longest ago.
 
 Tool calls then specify which assembly to inspect:
 
 ```
-list_types(assembly="C:\\path\\to\\dlls\\MyApp.dll", namespaceName="MyApp.Models")
+find_types(assembly="C:\\path\\to\\dlls\\MyApp.dll", namespace="MyApp.Models")
 ```
 
 The `list_allowed_roots` tool surfaces the configured roots so the agent can discover what's reachable.
 
 > **Heads up — a first install needs a full restart, not just a new session.** Windows captures `PATH` per-process at launch, so an already-running Claude app holds a stale environment whenever `ilens` is a brand-new entry on user PATH (true for a first-ever winget portable install, or any `install.ps1` run). Claude Code reads `.mcp.json` only at session start, so the new server isn't registered in any running session either. Recipe: close Claude app entirely → install ILens → relaunch Claude app → start a **new** Claude Code session in the relaunched app. Resumed sessions survive a Claude app restart and still hold the old environment, so they won't find `ilens`. Subsequent `winget upgrade Tadis.ILens` runs don't change PATH; they only need a fresh Claude Code session.
 
-### Step 2: Tell Claude to use it
+### Step 2: Clients that do not read server instructions
 
-Without this, Claude won't actually pick ILens — it'll keep reaching for `ildasm` via Bash, reading assembly files directly, or web-searching for source. Drop the following block into your project's `CLAUDE.md` and replace `<allow-root>` with the directory configured above:
+When a client connects, ILens sends it MCP server instructions: what ILens is for, which directories it can read, and which tool answers which question. Claude Code reads them at the start of every session, in the terminal and in the Claude desktop app's Code tab, so with Claude Code, Step 1 is the whole setup.
 
-````markdown
+Claude Desktop's chat does not read server instructions. For it, and for any other client that does not, add this paragraph to the client's instructions and replace `<allow-root>` with the directory configured above. It names no tool, so it stays correct when a release renames or merges tools:
+
+```markdown
 ## Inspecting .NET assemblies
 
 Assemblies under `<allow-root>` are reachable through the `ilens` MCP server.
-Prefer ILens tools over running `ildasm` / `ilspycmd` via Bash, reading assembly
-files directly, or web-searching for source.
+Prefer its tools over running `ildasm` or `ilspycmd` in a shell, reading
+assembly files directly, or searching the web for source.
+```
 
-- Discovery: `search_types` (substring match), `list_types` (whole namespace),
-  `find_methods` (signature search).
-- Reading: `summarize_type` (public surface, no bodies), `list_members`
-  (filtered surface), `decompile_type` (full C#), `decompile_method` (single
-  method body), `decompile_property` / `decompile_event` (full property or
-  event declaration with accessor bodies, by unprefixed name).
-- Cross-references: `analyze` with `kind` set to one of `UsedBy`,
-  `InstantiatedBy`, `ExposedBy`, `ExtensionMethods`, `AppliedTo`,
-  `OverriddenBy`, `ImplementedBy`, `Uses`, `Implements`, `ReadBy`,
-  `AssignedBy`. Valid kinds depend on the symbol category.
-- Comparing two builds: `list_changed_types` (what differs between two
-  assemblies), `compare_type` (per-type member and body diff), `compare_method`
-  (one method's body as C# or IL).
-````
-
-#### Per-line walkthrough
-
-- The first paragraph is the load-bearing prefer-MCP rule. Without it, models default to `Bash`.
-- The discovery bullet routes "I don't know the full name" tasks to the right tool: a partial name goes to `search_types`, a known namespace goes to `list_types`, a method shape goes to `find_methods`.
-- The reading bullet escalates from cheapest to most expensive: `summarize_type` first, `list_members` when only part of the surface is needed, `decompile_method` for one method body (or `decompile_property` / `decompile_event` for the whole property or event without having to know the IL accessor prefix), `decompile_type` only when full source is required.
-- The `analyze` bullet enumerates the `kind` enum so the model picks values the schema accepts — using one that does not apply to the symbol category produces an error like `Analysis kind 'ReadBy' is not valid for Method`.
-- The comparison bullet is for "did this change between two builds?" work: `list_changed_types` to find what differs, `compare_type` for one type's member and body diff, `compare_method` to read a single differing body.
+If your project's `CLAUDE.md` or a client's instructions hold the block an earlier ILens README asked you to paste, delete it: it names tools that no longer exist. A client that does not read server instructions takes the paragraph above in its place.
 
 ## Full reference
 
@@ -111,7 +93,7 @@ A self-contained HTML user guide covers what this README does not:
 
 - **Per-tool reference** — every tool, every parameter (with `required` / `optional` flags and types), return shape, and full list of error conditions
 - **Alternative integration paths** — `claude mcp add` CLI command, Claude Desktop config
-- **Security model** — what's enforced (`--allow-root` mandatory, no traversal, no network, 200 MB cap, read-only), and what's not
+- **Security model** — what's enforced (`--allow-root` mandatory, no traversal, no network, 200 MB memory budget, read-only), and what's not
 - **Troubleshooting** — error string → likely cause mapping
 
 Read it online at **https://tadis174.github.io/ILens/guide.html**, or open the bundled `guide.html` from the release ZIP.

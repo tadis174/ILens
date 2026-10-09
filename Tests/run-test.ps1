@@ -2,7 +2,7 @@
 # it by hand, from CI, or from the /publish gate; it does not depend on Claude.
 #
 # Spawns the real ILens MCP server and exercises its tools over the MCP protocol
-# (the tests live in Tests/DecompilerAssemblyTests.cs).
+# (the tests are the *Tests.cs classes in Tests/).
 #
 # Modes:
 #   (no args)          Inner loop — builds Core (Release) and tests that build

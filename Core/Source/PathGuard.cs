@@ -83,6 +83,29 @@ public sealed class PathGuard
         return resolved;
     }
 
+    /// <summary>
+    /// Whether the decompiler may open a file it found for an assembly reference. A file under an
+    /// allowed root must resolve inside one, as a requested path must, so a link planted in a root
+    /// cannot point the decompiler at a file outside every root. A file outside every root is one
+    /// the search for the installed .NET libraries found, which is not this class's concern.
+    /// </summary>
+    public bool AdmitsReference(string path)
+    {
+        var normalized = Path.GetFullPath(path);
+        if (!_allowedRoots.Any(r => IsUnderRoot(normalized, r)))
+            return true;
+
+        try
+        {
+            var resolved = ResolveReparsePoints(normalized);
+            return _allowedRoots.Any(r => IsUnderRoot(resolved, r));
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
     private static bool ContainsParentSegment(string path)
     {
         foreach (var segment in path.Split('/', '\\'))

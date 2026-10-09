@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only fixture: types whose base class, interface, accessor bodies or
+    compiler-generated code change between this assembly and its twin,
+    BaseShift2, which compiles the same sources with SHIFTED defined. The
+    language version is the latest, so the generated names include those that
+    newer compilers emit. Not consumed by Tests' source code; only its compiled
+    output is inspected by the ILens server during the e2e suite.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+</Project>

@@ -8,112 +8,101 @@ namespace ILens.Tools;
 [McpServerToolType]
 public static class FindMethodsTool
 {
-    private const int DefaultLimit = 50;
-
     [McpServerTool(Name = "find_methods", ReadOnly = true),
-     Description("Search the assembly for methods matching a signature. " +
-        "Combine any of: name pattern, return type, parameter types, parameter count, " +
-        "declaring namespace, declaring type, declaring-type pattern, accessibility.\n" +
-        "To list the methods of one known type, pass declaringType with its fully qualified " +
-        "name (e.g., 'System.IO.File') — the same form decompile_method's typeName takes. " +
-        "declaringTypePattern is the looser sibling: a case-insensitive substring of the short name.\n" +
-        "Type patterns match by short name OR full name (e.g., 'String' or 'System.String'). " +
-        "Generics are erased at the top level — 'List' matches List<T> for any T. " +
-        "Nullable<T> is unwrapped — 'int' matches both 'int' and 'int?'. " +
-        "Arrays are matched with '[]' suffix (e.g., 'int[]', 'String[]'). " +
-        "Matching is exact (no inheritance walk); use analyze with UsedBy/Uses for assignability-aware exploration. " +
-        "Constructors and property/event accessors are excluded; operator methods (op_*) are included. " +
-        "To decompile an accessor body, call decompile_method with the accessor's IL name (get_X, set_X, add_X, remove_X). " +
-        "Results are sorted by declaring type, then method name; capped at limit (default 50).")]
+     Description("Find methods by signature across the assembly, or list one type's methods with type_name. " +
+        "One line per method, sorted: static when it is, then Type.Method(parameter types) → return type, " +
+        "the form decompile and analyze take. Constructors are named .ctor and operators op_*. Property and " +
+        "event accessors are left out; decompile and analyze reach one by its IL name, such as get_Count.")]
     public static string FindMethods(
         AssemblyHostRegistry registry,
-        [Description("Path to the .NET assembly to inspect (must be under an allowed root).")] string assembly,
-        [Description("Optional case-insensitive substring filter on method name.")] string namePattern = null,
-        [Description("Optional return-type pattern (e.g., 'bool', 'IEnumerable', 'String').")] string returns = null,
-        [Description("Optional ordered list of parameter-type patterns. The method must have exactly this many parameters, each matching the pattern at its position.")] string[] parameterTypes = null,
-        [Description("Optional exact parameter count. If parameterTypes is also set, the two must agree.")] int? parameterCount = null,
-        [Description("Optional exact declaring namespace, e.g. 'System.IO' or 'System.Collections.Generic'.")] string declaringNamespace = null,
-        [Description("Optional exact fully qualified declaring type, e.g. 'System.IO.File'. Nested types take '+' or '.'. Errors if no such type exists. Mutually exclusive with declaringTypePattern.")] string declaringType = null,
-        [Description("Optional case-insensitive substring filter on declaring type's short name.")] string declaringTypePattern = null,
-        [Description("Accessibility filter. Default: PublicProtected.")] AccessibilityFilter accessibility = AccessibilityFilter.PublicProtected,
-        [Description("Cap on result lines. Default 50.")] int? limit = null)
+        [Description(ParameterDescriptions.Assembly)] string assembly,
+        [Description(ParameterDescriptions.NameContains)] string name_contains = null,
+        [Description($"Return-type pattern, matched by the rules of {nameof(parameter_types)}.")] string return_type = null,
+        [Description(ParameterDescriptions.ParameterTypes)] string[] parameter_types = null,
+        [Description(ParameterDescriptions.ParameterCount)] int? parameter_count = null,
+        [Description(ParameterDescriptions.Namespace)] string @namespace = null,
+        [Description(ParameterDescriptions.TypeName)] string type_name = null,
+        [Description("Case-insensitive substring of the declaring type's name, without namespace; cannot be combined with type_name.")] string type_name_contains = null,
+        [Description(ParameterDescriptions.Accessibility)] AccessibilityFilter accessibility = AccessibilityFilter.PublicProtected,
+        [Description(ParameterDescriptions.IncludeCompilerGenerated)] bool include_compiler_generated = false,
+        [Description(ParameterDescriptions.Limit)] int limit = ListOutput.DefaultLimit)
     {
-        SymbolResolver.ValidateDisambiguationArgs(parameterCount, parameterTypes);
+        SymbolResolver.ValidateDisambiguationArgs(parameter_count, parameter_types);
 
-        if (!string.IsNullOrEmpty(declaringType) && !string.IsNullOrEmpty(declaringTypePattern))
+        if (!string.IsNullOrEmpty(type_name) && !string.IsNullOrEmpty(type_name_contains))
             throw new ArgumentException(
-                "declaringType and declaringTypePattern are mutually exclusive — " +
-                "declaringType is an exact fully qualified name, declaringTypePattern is a " +
+                $"{nameof(type_name)} and {nameof(type_name_contains)} are mutually exclusive — " +
+                $"{nameof(type_name)} is an exact fully qualified name, {nameof(type_name_contains)} is a " +
                 "substring of the short name. Pass whichever one you mean.");
 
-        var host = registry.GetOrLoad(assembly);
+        using var lease = registry.GetOrLoad(assembly);
+        var host = lease.Host;
 
-        // Resolve up front so a name that matches no type is an error, not an empty result.
-        // An exact name asserts the type exists, so answering a misspelling with "No methods
-        // match" would read as "that type has no such methods" — a wrong answer wearing the
-        // shape of a right one. A *pattern* matching nothing is a legitimate empty result,
-        // so declaringTypePattern gets no such check.
-        var resolvedDeclaringType = string.IsNullOrEmpty(declaringType)
+        // Resolve up front so a name that matches no type or namespace is an error, not an
+        // empty result. An exact name asserts the type or namespace exists, so answering a
+        // misspelling with "No methods" would read as "there are no such methods" — a wrong
+        // answer wearing the shape of a right one. A substring matching nothing is a
+        // legitimate empty result, so type_name_contains gets no such check.
+        var resolvedDeclaringType = string.IsNullOrEmpty(type_name)
             ? null
-            : host.Resolver.ResolveType(declaringType).FullName;
+            : host.Resolver.ResolveType(type_name);
+        if (!string.IsNullOrEmpty(@namespace))
+            host.Resolver.RequireNamespace(@namespace);
 
-        var matches = ScanAssembly(host, namePattern, returns, parameterTypes,
-            parameterCount, declaringNamespace, resolvedDeclaringType, declaringTypePattern,
-            accessibility);
+        var matches = ScanAssembly(host, name_contains, return_type, parameter_types,
+            parameter_count, @namespace, resolvedDeclaringType, type_name_contains,
+            accessibility, include_compiler_generated);
 
-        matches.Sort((a, b) =>
-        {
-            var c = string.Compare(a.DeclaringType.FullName, b.DeclaringType.FullName,
-                StringComparison.Ordinal);
-            return c != 0 ? c : string.Compare(a.Name, b.Name, StringComparison.Ordinal);
-        });
-
-        return FormatResults(matches, limit ?? DefaultLimit);
+        return FormatResults(matches, limit);
     }
 
     private static List<IMethod> ScanAssembly(
         AssemblyHost host,
-        string namePattern,
-        string returns,
-        string[] parameterTypes,
-        int? parameterCount,
-        string declaringNamespace,
-        string resolvedDeclaringType,
-        string declaringTypePattern,
-        AccessibilityFilter accessibility)
+        string name_contains,
+        string return_type,
+        string[] parameter_types,
+        int? parameter_count,
+        string @namespace,
+        ITypeDefinition resolvedDeclaringType,
+        string type_name_contains,
+        AccessibilityFilter accessibility,
+        bool include_compiler_generated)
     {
         var matches = new List<IMethod>();
 
         foreach (var typeDef in host.TypeSystem.MainModule.TypeDefinitions)
         {
-            if (declaringNamespace != null && typeDef.Namespace != declaringNamespace)
+            if (!string.IsNullOrEmpty(@namespace) && typeDef.Namespace != @namespace)
                 continue;
-            if (resolvedDeclaringType != null && typeDef.FullName != resolvedDeclaringType)
+            // By identity, not FullName, which same-named generic types share.
+            if (resolvedDeclaringType != null && typeDef.MetadataToken != resolvedDeclaringType.MetadataToken)
                 continue;
-            if (!string.IsNullOrEmpty(declaringTypePattern) &&
-                !typeDef.Name.Contains(declaringTypePattern, StringComparison.OrdinalIgnoreCase))
+            if (!string.IsNullOrEmpty(type_name_contains) &&
+                !typeDef.Name.Contains(type_name_contains, StringComparison.OrdinalIgnoreCase))
                 continue;
 
             foreach (var method in typeDef.Methods)
             {
-                if (method.IsConstructor || method.IsAccessor)
+                if (method.IsAccessor)
+                    continue;
+                if (!include_compiler_generated && CompilerGeneratedFilter.IsCompilerGenerated(method))
                     continue;
                 if (!accessibility.Permits(method.Accessibility))
                     continue;
-                if (!string.IsNullOrEmpty(namePattern) &&
-                    !method.Name.Contains(namePattern, StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrEmpty(name_contains) &&
+                    !method.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                if (parameterCount.HasValue && method.Parameters.Count != parameterCount.Value)
+                if (parameter_count.HasValue && method.Parameters.Count != parameter_count.Value)
                     continue;
 
-                if (parameterTypes != null)
+                if (parameter_types != null)
                 {
-                    if (method.Parameters.Count != parameterTypes.Length) continue;
+                    if (method.Parameters.Count != parameter_types.Length) continue;
                     var paramsOk = true;
-                    for (int i = 0; i < parameterTypes.Length; i++)
+                    for (int i = 0; i < parameter_types.Length; i++)
                     {
-                        if (!TypeMatcher.Matches(method.Parameters[i].Type, parameterTypes[i]))
+                        if (!TypeMatcher.Matches(method.Parameters[i].Type, parameter_types[i]))
                         {
                             paramsOk = false;
                             break;
@@ -122,7 +111,7 @@ public static class FindMethodsTool
                     if (!paramsOk) continue;
                 }
 
-                if (!string.IsNullOrEmpty(returns) && !TypeMatcher.Matches(method.ReturnType, returns))
+                if (!string.IsNullOrEmpty(return_type) && !TypeMatcher.Matches(method.ReturnType, return_type))
                     continue;
 
                 matches.Add(method);
@@ -132,29 +121,19 @@ public static class FindMethodsTool
         return matches;
     }
 
+    /// <summary>
+    /// One line per method in the reference form the other tools print and take, without
+    /// parameter names, so a line copied into parameter_types matches; static is kept, and so is
+    /// the return type, since a search by signature asks about both. Sorted by the reference.
+    /// </summary>
     private static string FormatResults(List<IMethod> matches, int limit)
     {
-        if (matches.Count == 0)
-            return "No methods match";
-
-        var emitting = Math.Min(matches.Count, limit);
-        var sb = new StringBuilder();
-        sb.Append($"{matches.Count} match{(matches.Count == 1 ? "" : "es")}");
-        if (matches.Count > limit) sb.Append($" (showing {limit})");
-        sb.Append(":\n");
-
-        for (int i = 0; i < emitting; i++)
-        {
-            var m = matches[i];
-            var parameters = string.Join(", ", m.Parameters.Select(SignatureFormatter.FormatParameter));
-            var modifier = m.IsStatic ? "static " : "";
-            sb.Append($"  {modifier}{m.DeclaringType.FullName}.{m.Name}" +
-                      $"({parameters}) → {ReferenceFormatter.FormatTypeRef(m.ReturnType)}\n");
-        }
-
-        if (matches.Count > limit)
-            sb.Append($"... ({matches.Count - limit} more matches; raise limit to see all)");
-
-        return sb.ToString().TrimEnd();
+        var lines = matches
+            .Select(m => (Reference: ReferenceFormatter.FormatMethodReference(m), Method: m))
+            .OrderBy(entry => entry.Reference, StringComparer.Ordinal)
+            .Select(entry => $"{(entry.Method.IsStatic ? "static " : "")}{entry.Reference} → " +
+                ReferenceFormatter.FormatReturnType(entry.Method))
+            .ToList();
+        return ListOutput.Format(lines, limit, Noun.Regular("method"));
     }
 }

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only fixture: members that implement an interface member explicitly, in
+    every shape name resolution treats differently. A method, a property and an
+    event with no ordinary member of their names, an ordinary member of the same
+    name beside an explicit one, an inherited explicit implementation, and two
+    explicit implementations sharing a name. Not consumed by Tests' source code;
+    only its compiled output is inspected by the ILens server during the e2e suite.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+</Project>

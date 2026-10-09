@@ -5,7 +5,7 @@
 # figures instead of estimates.
 #
 # Invoked automatically by /doc in stats-consuming modes (--user, --readme,
-# and no-arg), so the bundled docs always ship with a current measurement
+# --public and no-arg), so the bundled docs always ship with a current measurement
 # timestamp. /doc --dev skips it (the dev guide doesn't carry the table).
 # Can still be run by hand for ad-hoc re-measurement — the artifact is committed.
 #
@@ -239,17 +239,17 @@ try {
     }
     Send-McpMessage -Writer $stdin -Message @{ jsonrpc = '2.0'; method = 'notifications/initialized' }
 
-    $listTypesText = Measure-ILensTool -Writer $stdin -Reader $stdout -Id 2 -ToolName 'list_types' -Arguments @{
+    $findTypesText = Measure-ILensTool -Writer $stdin -Reader $stdout -Id 2 -ToolName 'find_types' -Arguments @{
         assembly      = $targetDll
-        namespaceName = 'ICSharpCode.Decompiler.TypeSystem'
+        namespace     = 'ICSharpCode.Decompiler.TypeSystem'
     }
-    $summarizeText = Measure-ILensTool -Writer $stdin -Reader $stdout -Id 3 -ToolName 'summarize_type' -Arguments @{
+    $listMembersText = Measure-ILensTool -Writer $stdin -Reader $stdout -Id 3 -ToolName 'list_members' -Arguments @{
         assembly = $targetDll
-        typeName = 'ICSharpCode.Decompiler.CSharp.CSharpDecompiler'
+        type_name = 'ICSharpCode.Decompiler.CSharp.CSharpDecompiler'
     }
     $findMethodsText = Measure-ILensTool -Writer $stdin -Reader $stdout -Id 4 -ToolName 'find_methods' -Arguments @{
         assembly    = $targetDll
-        namePattern = 'Decompile'
+        name_contains = 'Decompile'
     }
 }
 finally {
@@ -293,22 +293,22 @@ $result = [ordered]@{
     rows            = @(
         [ordered]@{
             task            = 'List the public types in a namespace'
-            ilensTool       = 'list_types'
-            ilensCall       = "list_types(namespaceName: 'ICSharpCode.Decompiler.TypeSystem')"
-            chars           = $listTypesText.Length
-            tokensEstimated = (Get-TokenEstimate -Chars $listTypesText.Length -Divisor $charsPerToken)
+            ilensTool       = 'find_types'
+            ilensCall       = "find_types(namespace: 'ICSharpCode.Decompiler.TypeSystem')"
+            chars           = $findTypesText.Length
+            tokensEstimated = (Get-TokenEstimate -Chars $findTypesText.Length -Divisor $charsPerToken)
         }
         [ordered]@{
             task            = 'See the API surface of one mid-sized class'
-            ilensTool       = 'summarize_type'
-            ilensCall       = "summarize_type(typeName: 'ICSharpCode.Decompiler.CSharp.CSharpDecompiler')"
-            chars           = $summarizeText.Length
-            tokensEstimated = (Get-TokenEstimate -Chars $summarizeText.Length -Divisor $charsPerToken)
+            ilensTool       = 'list_members'
+            ilensCall       = "list_members(type_name: 'ICSharpCode.Decompiler.CSharp.CSharpDecompiler')"
+            chars           = $listMembersText.Length
+            tokensEstimated = (Get-TokenEstimate -Chars $listMembersText.Length -Divisor $charsPerToken)
         }
         [ordered]@{
             task            = 'Find which types expose a given method'
             ilensTool       = 'find_methods'
-            ilensCall       = "find_methods(namePattern: 'Decompile')"
+            ilensCall       = "find_methods(name_contains: 'Decompile')"
             chars           = $findMethodsText.Length
             tokensEstimated = (Get-TokenEstimate -Chars $findMethodsText.Length -Divisor $charsPerToken)
         }

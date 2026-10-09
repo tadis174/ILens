@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only fixture: fields used through the address the compiler takes, in
+    every way the read_by and assigned_by answers tell apart. The language
+    version is the latest, for readonly members and in parameters. Not consumed
+    by Tests' source code; only its compiled output is inspected by the ILens
+    server during the e2e suite.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+</Project>

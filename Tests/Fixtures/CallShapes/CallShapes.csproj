@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only fixture: the same uses placed in every shape the compiler moves
+    out of the method they are written in (lambdas, local functions, iterators,
+    async methods), beside a plain method as the control, and calls that pass
+    an argument to an optional parameter in every way that can reach it. Not
+    consumed by Tests' source code; only its compiled output is inspected by
+    the ILens server during the e2e suite.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+</Project>

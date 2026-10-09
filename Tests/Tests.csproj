@@ -37,8 +37,9 @@
   <!-- HarmonyMod fixture: a tiny Harmony-patching assembly compiled from
        Fixtures/HarmonyMod/, used as the inspection target for the
        find_harmony_dependencies tests. HarmonyMod2 is the RVA-shifted twin
-       used by the TASK-21 regression test (same source, extra Padding class
-       declared earlier → identical IL at different file positions).
+       the comparison tests use to check that identical IL at different file
+       positions compares equal (same source, extra Padding class declared
+       earlier).
        ReferenceOutputAssembly=false keeps their types out of Tests'
        compilation — we only want the DLLs to land in the test output bin. -->
   <ItemGroup>
@@ -48,6 +49,91 @@
                       OutputItemType="Content"
                       CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="Fixtures\HarmonyMod2\HarmonyMod2.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- CallShapes fixture: the same uses inside lambdas, local functions,
+       iterators and async methods, the shapes the compiler moves into generated
+       methods, and the argument shapes call_sites resolves. Used by the
+       analyze tests. -->
+  <ItemGroup>
+    <ProjectReference Include="Fixtures\CallShapes\CallShapes.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- BaseShift fixture and its twin BaseShift2: one source compiled twice, the
+       second time with SHIFTED defined, so that a few types change their base
+       class or interface, one changes only inside accessor bodies, one has every
+       compiler-generated name shifted, one changes only inside generated code,
+       and nothing else differs. Used by the compare tests. -->
+  <ItemGroup>
+    <ProjectReference Include="Fixtures\BaseShift\BaseShift.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="Fixtures\BaseShift2\BaseShift2.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- ExternalUser fixture: uses a type of ExternalLib in every shape analyze
+       answers for a type from another assembly. ExternalLib.dll lands only in
+       References, so for the shared server its references stay unresolved. -->
+  <ItemGroup>
+    <ProjectReference Include="Fixtures\ExternalUser\ExternalUser.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- References: the assemblies the fixtures reference, ExternalLib for
+       ExternalUser and HarmonyLib for HarmonyMod, one level below the test
+       output. The shared server searches only the top of an allow-root, so it
+       does not find them; the reference tests give a second server this folder
+       as an allow-root of its own. Lib.Harmony.Ref is the reference assembly
+       HarmonyMod's Lib.Harmony compiles against, so its version follows that
+       one. -->
+  <ItemGroup>
+    <ProjectReference Include="Fixtures\ExternalLib\ExternalLib.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest"
+                      Link="References\ExternalLib.dll" />
+    <PackageReference Include="Lib.Harmony.Ref" Version="2.3.6"
+                      GeneratePathProperty="true"
+                      ExcludeAssets="all" />
+    <Content Include="$(PkgLib_Harmony_Ref)\ref\netstandard2.0\0Harmony.dll"
+             Link="References\0Harmony.dll"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- ExplicitMembers fixture: members implementing an interface member
+       explicitly, in each shape name resolution treats differently. Used by the
+       tests that resolve a member by the plain name of the interface member. -->
+  <ItemGroup>
+    <ProjectReference Include="Fixtures\ExplicitMembers\ExplicitMembers.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- FieldAccess fixture: fields used through the address the compiler takes,
+       in every way the read_by and assigned_by answers tell apart. Used by the
+       field-access tests. -->
+  <ItemGroup>
+    <ProjectReference Include="Fixtures\FieldAccess\FieldAccess.csproj"
                       ReferenceOutputAssembly="false"
                       Private="true"
                       OutputItemType="Content"

@@ -3,8 +3,8 @@ using ICSharpCode.Decompiler.TypeSystem;
 namespace ILens;
 
 /// <summary>
-/// Member kinds the list_members tool can emit. A subset of <see cref="SymbolCategory"/>
-/// without <c>Type</c>, since types aren't members of other types in the relevant sense.
+/// Member kinds the list_members tool can emit: the <see cref="SymbolCategory"/> values of a
+/// type's members, with its nested types in place of <c>Type</c>. A constructor is a method.
 /// </summary>
 public enum MemberKind
 {
@@ -12,11 +12,12 @@ public enum MemberKind
     Property,
     Field,
     Event,
+    NestedType,
 }
 
 /// <summary>
-/// Accessibility filter for member-listing tools. <see cref="PublicProtected"/> matches
-/// what summarize_type emits today (public + every flavor of protected).
+/// Accessibility filter for the tools that list types and members. <see cref="PublicProtected"/>,
+/// their default, is public and every flavor of protected.
 /// </summary>
 public enum AccessibilityFilter
 {

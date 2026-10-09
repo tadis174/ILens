@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "measuredAtUtc": "2026-08-03",
+  "measuredAtUtc": "2026-10-09",
   "charsPerToken": 4,
-  "ilensVersion": "9",
+  "ilensVersion": "10",
   "target": {
     "assembly": "ICSharpCode.Decompiler.dll",
     "version": "9.1.0.7988",
@@ -18,24 +18,24 @@
   "rows": [
     {
       "task": "List the public types in a namespace",
-      "ilensTool": "list_types",
-      "ilensCall": "list_types(namespaceName: 'ICSharpCode.Decompiler.TypeSystem')",
-      "chars": 4783,
-      "tokensEstimated": 1196
+      "ilensTool": "find_types",
+      "ilensCall": "find_types(namespace: 'ICSharpCode.Decompiler.TypeSystem')",
+      "chars": 4403,
+      "tokensEstimated": 1101
     },
     {
       "task": "See the API surface of one mid-sized class",
-      "ilensTool": "summarize_type",
-      "ilensCall": "summarize_type(typeName: 'ICSharpCode.Decompiler.CSharp.CSharpDecompiler')",
-      "chars": 3577,
-      "tokensEstimated": 895
+      "ilensTool": "list_members",
+      "ilensCall": "list_members(type_name: 'ICSharpCode.Decompiler.CSharp.CSharpDecompiler')",
+      "chars": 2213,
+      "tokensEstimated": 554
     },
     {
       "task": "Find which types expose a given method",
       "ilensTool": "find_methods",
-      "ilensCall": "find_methods(namePattern: 'Decompile')",
-      "chars": 2471,
-      "tokensEstimated": 618
+      "ilensCall": "find_methods(name_contains: 'Decompile')",
+      "chars": 2069,
+      "tokensEstimated": 518
     }
   ]
 }

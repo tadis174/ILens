@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Twin of BaseShift. Compiles BaseShift's sources with SHIFTED defined, which
+    gives the types named *Mover another base class or interface, changes some of
+    Gauge's accessor bodies, shifts every compiler-generated name in Renumbered
+    and changes ChangedInside only inside generated code, and nothing else, so a
+    comparison of the two assemblies reports exactly those.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+    <DefineConstants>$(DefineConstants);SHIFTED</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\BaseShift\Types.cs" Link="Types.cs" />
+    <Compile Include="..\BaseShift\Accessors.cs" Link="Accessors.cs" />
+    <Compile Include="..\BaseShift\Generated.cs" Link="Generated.cs" />
+  </ItemGroup>
+
+</Project>

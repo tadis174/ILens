@@ -18,8 +18,8 @@ namespace ILens;
 /// second reading here to be wrong about.
 ///
 /// The check is schema-driven, so it covers every array parameter on every tool with no per-tool
-/// maintenance — <c>kinds</c> on <c>list_members</c> today, and <c>parameterTypes</c> on
-/// <c>analyze</c> / <c>decompile_method</c> / <c>find_methods</c>.
+/// maintenance — <c>kinds</c> on <c>list_members</c> today, and <c>parameter_types</c> on
+/// <c>analyze</c>, <c>decompile</c> and <c>find_methods</c>.
 /// </summary>
 internal static class ArrayCoercionFilter
 {

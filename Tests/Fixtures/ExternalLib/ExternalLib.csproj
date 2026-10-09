@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only fixture: the library ExternalUser uses in every shape analyze
+    answers for a type from another assembly. Tests places its DLL only in the
+    References folder of the test output, which the shared test server does
+    not search, so there ILens knows these types only from ExternalUser's
+    references to them.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+</Project>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ILens 9 — User Guide</title>
+<title>ILens 10 — User Guide</title>
 <style>
 :root {
   --brand-green:        #008800;
@@ -117,7 +117,7 @@ table {
   margin: 1rem 0;
   font-size: 0.9rem;
 }
-th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--rule); }
+th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
 th { color: var(--brand-green); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.03em; }
 td.num, th.num { text-align: right; white-space: nowrap; }
 
@@ -151,7 +151,7 @@ ul.tight li { margin: 0.3rem 0; }
   </div>
   <div class="header-text">
     <h1>ILens</h1>
-    <p class="version">Version 9 — user guide</p>
+    <p class="version">Version 10 — user guide</p>
     <p class="tagline">MCP server for inspecting .NET assemblies</p>
   </div>
 </div>
@@ -168,6 +168,7 @@ ul.tight li { margin: 0.3rem 0; }
   <li><a href="#security">Security model</a></li>
   <li><a href="#tools">Tool reference</a>
     <ul>
+      <li><a href="#tools-conventions">Conventions every tool shares</a></li>
       <li><a href="#tools-discovery">Discovery</a></li>
       <li><a href="#tools-inspection">Inspection</a></li>
       <li><a href="#tools-decompilation">Decompilation</a></li>
@@ -188,28 +189,27 @@ ul.tight li { margin: 0.3rem 0; }
 
 <p>An AI agent that needs to look inside a compiled .NET assembly usually shells out to
 <code>ildasm</code> (an IL dump) or <code>ilspycmd</code> (a full C# decompile) through a
-generic <code>Bash</code> tool. Both dump an entire file as text. That output does not
-evaporate once it has been read: it stays in the agent's context as input tokens, re-sent on
-every subsequent turn. Inspecting a single class can cost thousands of tokens, and the cost
-recurs for the rest of the session.</p>
+generic <code>Bash</code> tool. Both dump an entire file as text. That output stays in the
+agent's context as input tokens and is sent again on every later turn, so inspecting a single
+class can cost thousands of tokens, and the cost recurs for the rest of the session.</p>
 
-<p>The target measured below is <code>ICSharpCode.Decompiler.dll</code> 9.1.0.7988 — a 2.4 MB
-assembly with 741 public types. A full decompile of it costs the same regardless of how narrow
-the actual question is, which is why the baseline column repeats.</p>
+<p>The target measured below is <code>ICSharpCode.Decompiler.dll</code> 9.1.0.7988, a 2.4 MB
+assembly with 741 public types. A full decompile of it costs the same however narrow the
+question is, which is why the baseline column repeats.</p>
 
 <table>
 <thead>
 <tr><th>Task</th><th class="num"><code>ilspycmd</code> cost</th><th>ILens tool</th><th class="num">ILens cost</th></tr>
 </thead>
 <tbody>
-<tr><td>List the public types in a namespace</td><td class="num">1,041,476 tokens</td><td><code>list_types</code></td><td class="num">1,196 tokens</td></tr>
-<tr><td>See the API surface of one mid-sized class</td><td class="num">1,041,476 tokens</td><td><code>summarize_type</code></td><td class="num">895 tokens</td></tr>
-<tr><td>Find which types expose a given method</td><td class="num">1,041,476 tokens</td><td><code>find_methods</code></td><td class="num">618 tokens</td></tr>
+<tr><td>List the public types in a namespace</td><td class="num">1,041,476 tokens</td><td><code>find_types</code></td><td class="num">1,101 tokens</td></tr>
+<tr><td>See the API surface of one mid-sized class</td><td class="num">1,041,476 tokens</td><td><code>list_members</code></td><td class="num">554 tokens</td></tr>
+<tr><td>Find which types expose a given method</td><td class="num">1,041,476 tokens</td><td><code>find_methods</code></td><td class="num">518 tokens</td></tr>
 </tbody>
 </table>
 
 <p class="caption">Measured against <code>ICSharpCode.Decompiler.dll</code> 9.1.0.7988 on
-2026-08-03; token figures are character counts divided by 4, not a real tokenizer.</p>
+2026-10-09; token figures are character counts divided by 4, not a real tokenizer.</p>
 
 <p>ILens turns assembly inspection into bounded, targeted lookups instead of full-file dumps —
 which is what makes it cheap enough to leave registered as an always-available tool.</p>
@@ -217,20 +217,19 @@ which is what makes it cheap enough to leave registered as an always-available t
 <h2 id="overview">Overview and scope</h2>
 
 <p>ILens is an MCP server that speaks JSON-RPC over stdio and exposes tools in four categories:
-discovery (finding types and methods by name or signature), inspection (API surface and
-cross-reference analysis), decompilation (C# source for a type, method, property, or event),
-and comparison (what differs between two builds). It is read-only, restricted to the
-directories named by <code>--allow-root</code>, makes no network calls, and ships as a single
-self-contained Windows binary.</p>
+discovery (finding types and methods by name or signature), inspection (a type's members,
+cross-reference analysis, and what a Harmony mod depends on), decompilation (C# source for a
+type or one of its members), and comparison (what differs between two builds). It is read-only,
+restricted to the directories named by <code>--allow-root</code>, makes no network calls, and
+ships as a single self-contained Windows binary.</p>
 
 <p><strong>Scope.</strong> ILens is built for inspecting C# assemblies, and its output is C#.
-The metadata-driven tools — <code>list_types</code>, <code>search_types</code>,
-<code>list_members</code>, <code>find_methods</code>, <code>analyze</code> — read
-language-agnostic metadata and work on an assembly produced by any .NET language. The
-decompiling tools — <code>decompile_type</code>, <code>decompile_method</code>,
-<code>decompile_property</code>, <code>decompile_event</code>, <code>summarize_type</code> —
-always emit C#. An assembly compiled from F#, VB.NET, or C++/CLI still decompiles, but
-constructs the source language has and C# does not may render unfaithfully.</p>
+The metadata-driven tools — <code>find_types</code>, <code>find_methods</code>,
+<code>list_members</code>, <code>analyze</code> — read language-agnostic metadata and work on an
+assembly produced by any .NET language. <code>decompile</code> and <code>analyze</code>'s
+<code>call_sites</code> kind always emit C#. An assembly compiled from F#, VB.NET, or C++/CLI
+still decompiles, but constructs the source language has and C# does not may render
+unfaithfully.</p>
 
 <h2 id="built-on-ilspy">Built on ILSpy</h2>
 
@@ -317,7 +316,12 @@ Code session, not a resumed one.</p>
 
 <p>Each <code>--allow-root</code> flag adds a directory tree from which assemblies may be
 loaded. Without any <code>--allow-root</code> flags the server cannot load anything at all. Pass
-the flag more than once to configure several roots.</p>
+the flag more than once to configure several roots. ILens also looks at the top of each root for
+the assemblies an inspected assembly references, so the assemblies a mod builds against can sit
+in a root of their own and still resolve when the mod is decompiled. A second flag,
+<code>--max-total-size &lt;MB&gt;</code>, sets the memory budget described under
+<a href="#security">Security model</a>; <code>--version</code> prints the installed version and
+exits; any other argument stops the server at startup.</p>
 
 <p class="muted">For the equivalent <code>claude mcp add</code> CLI command see
 <a href="#appendix-cli">Appendix D</a>; for Claude Desktop see
@@ -325,52 +329,35 @@ the flag more than once to configure several roots.</p>
 
 <h2 id="project-guidance">Project-level guidance</h2>
 
-<p>Registering the server makes the tools <em>available</em>. It does not make Claude
-<em>prefer</em> them. Left alone, a model will still reach for <code>ildasm</code> through
-<code>Bash</code>, try to read the assembly file directly, or web-search for source that may not
-match your build. Closing that gap takes one paste-ready block in the consuming project's
-<code>CLAUDE.md</code>.</p>
+<p>Registering the server makes the tools <em>available</em>. It does not by itself make Claude
+<em>prefer</em> them: left to its habits, a model may still run <code>ildasm</code> or
+<code>ilspycmd</code> in a shell, read the assembly file directly, or search the web for source
+that does not match your build. ILens closes that gap itself, through the MCP server
+instructions it sends, so no project needs a block that names ILens's tools. The README divides
+setup into two steps: Step 1 registers the server, as described under
+<a href="#integrate">Integrating with Claude Code</a>, and Step 2 reads as follows.</p>
 
-<p>Drop the following into your project's <code>CLAUDE.md</code>, replacing
-<code>&lt;allow-root&gt;</code> with the directory you configured above:</p>
+<h3>Clients that do not read server instructions</h3>
+
+<p>When a client connects, ILens sends it MCP server instructions: what ILens is for, which
+directories it can read, and which tool answers which question. Claude Code reads them at the
+start of every session, in the terminal and in the Claude desktop app's Code tab, so with Claude
+Code, Step 1 is the whole setup.</p>
+
+<p>Claude Desktop's chat does not read server instructions. For it, and for any other client that
+does not, add this paragraph to the client's instructions and replace
+<code>&lt;allow-root&gt;</code> with the directory configured above. It names no tool, so it stays
+correct when a release renames or merges tools:</p>
 
 <pre><code>## Inspecting .NET assemblies
 
 Assemblies under `&lt;allow-root&gt;` are reachable through the `ilens` MCP server.
-Prefer ILens tools over running `ildasm` / `ilspycmd` via Bash, reading assembly
-files directly, or web-searching for source.
+Prefer its tools over running `ildasm` or `ilspycmd` in a shell, reading
+assembly files directly, or searching the web for source.</code></pre>
 
-- Discovery: `search_types` (substring match), `list_types` (whole namespace),
-  `find_methods` (signature search).
-- Reading: `summarize_type` (public surface, no bodies), `list_members`
-  (filtered surface), `decompile_type` (full C#), `decompile_method` (single
-  method body), `decompile_property` / `decompile_event` (full property or
-  event declaration with accessor bodies, by unprefixed name).
-- Cross-references: `analyze` with `kind` set to one of `UsedBy`,
-  `InstantiatedBy`, `ExposedBy`, `ExtensionMethods`, `AppliedTo`,
-  `OverriddenBy`, `ImplementedBy`, `Uses`, `Implements`, `ReadBy`,
-  `AssignedBy`. Valid kinds depend on the symbol category.
-- Comparing two builds: `list_changed_types` (what differs between two
-  assemblies), `compare_type` (per-type member and body diff), `compare_method`
-  (one method's body as C# or IL).</code></pre>
-
-<h4>Per-line walkthrough</h4>
-
-<ul class="tight">
-<li>The first paragraph is the load-bearing prefer-MCP rule. Without it, models default to
-<code>Bash</code>.</li>
-<li>The discovery bullet routes "I don't know the full name" tasks to the right tool: a partial
-name goes to <code>search_types</code>, a known namespace to <code>list_types</code>, a method
-shape to <code>find_methods</code>.</li>
-<li>The reading bullet escalates from cheapest to most expensive: <code>summarize_type</code>
-first, <code>list_members</code> when only part of the surface is needed,
-<code>decompile_method</code> for one method body (or <code>decompile_property</code> /
-<code>decompile_event</code> for a whole property or event without having to know the IL
-accessor prefix), and <code>decompile_type</code> only when full source is required.</li>
-<li>The <code>analyze</code> bullet enumerates the <code>kind</code> enum so the model picks
-values the schema accepts — using one that does not apply to the symbol category produces an
-error like <code>Analysis kind 'ReadBy' is not valid for Method</code>.</li>
-</ul>
+<p>If your project's <code>CLAUDE.md</code> or a client's instructions hold the block an earlier
+ILens README asked you to paste, delete it: it names tools that no longer exist. A client that
+does not read server instructions takes the paragraph above in its place.</p>
 
 <h2 id="security">Security model</h2>
 
@@ -381,79 +368,198 @@ loaded at all.</li>
 symbolic links and junctions are resolved to their real target first, so a link planted inside
 a root cannot point the loader outside it.</li>
 <li>Path-traversal segments (<code>..</code>) are rejected outright.</li>
-<li>Total memory is bounded by an aggregate budget (default 200 MB, set with
-<code>--max-total-size &lt;MB&gt;</code>): a load that would exceed the budget evicts
-least-recently-used assemblies, and a single assembly larger than the whole budget is
-refused.</li>
+<li>ILens's memory, as Windows charges it to the process, is bounded by a budget (default
+200 MB, set with <code>--max-total-size &lt;MB&gt;</code>): when a call ends above it, ILens
+closes the assemblies used longest ago until it is back under three quarters of it, so the
+budget can be exceeded only while calls run; an assembly that alone needs more is reopened for
+each call, and one whose file alone is larger than the budget is refused.</li>
 <li>All MCP tools are read-only — no writes to assemblies, no shell-out, no network calls.</li>
 <li>The server speaks stdio only; it does not open a network port.</li>
 <li>The allow-root bounds which <em>target</em> assemblies can be inspected — it is not the
-boundary of every file ILens opens. Decompilation also reads the target's dependency assemblies
-(siblings in its directory, and .NET framework and runtime assemblies) as type-resolution
-context.</li>
+boundary of every file ILens opens. Decompilation also reads the target's references as
+type-resolution context: inside the roots, assemblies beside the target and at the top of each
+allow-root; outside them, the installed .NET runtimes and .NET Framework, the global assembly
+cache, Windows metadata for WinRT references, and the NuGet package folders
+(<code>NUGET_PACKAGES</code> or <code>%USERPROFILE%\.nuget\packages</code>) that a
+<code>.deps.json</code> beside the target names. A reference found inside a root passes the same
+link check as a requested path, so a link there cannot lead outside the roots either.</li>
 </ul>
 
 <h2 id="tools">Tool reference</h2>
 
-<p>Fifteen tools, all read-only. Every tool except <code>list_allowed_roots</code> takes an
-<code>assembly</code> path that must resolve inside a configured allow-root; the comparison
-tools take two. Errors listed per tool are in addition to the path and budget errors shared by
-every assembly-loading tool, which are collected under
-<a href="#troubleshooting">Troubleshooting</a>.</p>
+<p>Eight tools, all read-only. Every tool except <code>list_allowed_roots</code> takes an
+<code>assembly</code> path that must resolve inside a configured allow-root;
+<code>compare</code> takes two, <code>assembly_a</code> and <code>assembly_b</code>. The path and
+budget errors every assembly-loading tool shares are collected under
+<a href="#troubleshooting">Troubleshooting</a> rather than repeated per tool.</p>
 
-<p>Any parameter typed as an array also accepts a lone value: <code>kinds: "Field"</code> means
-<code>["Field"]</code>, and <code>parameterTypes: "string"</code> means <code>["string"]</code>.
-This is schema-driven, so it holds for every array parameter on every tool.</p>
+<p>Any parameter typed as an array also accepts a lone value: <code>kinds: "field"</code> means
+<code>["field"]</code>, and <code>parameter_types: "string"</code> means
+<code>["string"]</code>. This holds for every array parameter on every tool.</p>
+
+<h3 id="tools-conventions">Conventions every tool shares</h3>
+
+<p><strong>Lists.</strong> Every tool that answers with a list takes <code>limit</code>
+(default 100). The answer opens with a header that counts every entry, not just the ones shown —
+<code>87 types:</code>, <code>3 member changes in BaseShift.Gauge:</code>. An empty answer is the
+header's own form, <code>No types</code>, so it cannot be mistaken for a truncated one. When the
+limit cuts the list, the last line says by how much:
+<code>... (85 more; raise limit to see all)</code>. Lists are sorted by the name they print, so a
+limit cuts predictably and the order stays stable across builds of the inspected assembly; only
+the calls <code>call_sites</code> lists within one caller keep their order in the code. Every
+answer is plain text.</p>
+
+<p><strong>Names.</strong> ILens prints a type by its fully qualified name, with
+<code>.</code> between a nested type and the type enclosing it and a generic type definition in
+C#'s unbound form: <code>System.Func&lt;,&gt;</code>,
+<code>System.Collections.Generic.Dictionary&lt;,&gt;.Enumerator</code>. It prints a member in
+reference form, <code>Type.Method(int, string)</code>. Every tool takes these forms back, so a
+name from one answer can be passed to the next tool. <code>type_name</code> also accepts the
+reflection form (<code>Outer+Inner</code>, <code>System.Func`2</code>) and an argument list
+(<code>System.Func&lt;int, bool&gt;</code>, whose argument count is the arity). A name written
+without arity resolves to the non-generic type when one exists and otherwise to the only type of
+that name; a name several generic types share, such as <code>System.Func</code>, is an error that
+lists them.</p>
+
+<p><strong>Type patterns.</strong> <code>parameter_types</code> and <code>return_type</code>
+take patterns rather than exact names. A pattern is a type's name, its full name, the end of its
+full name after any <code>.</code>, or a C# keyword (<code>int</code>, <code>string</code>). It
+matches the declared type only, not a base or derived one. <code>List</code> matches any
+<code>List&lt;T&gt;</code>, <code>List&lt;&gt;</code> any one-argument <code>List</code>, and
+<code>List&lt;int&gt;</code> only that one. A trailing <code>[]</code> matches an array and
+<code>*</code> a pointer, <code>int</code> also matches <code>int?</code>, a tuple matches as the
+<code>ValueTuple&lt;...&gt;</code> it prints as, and a <code>ref</code>, <code>out</code> or
+<code>in</code> prefix matches only a parameter passed by reference. A type copied from ILens's
+own output always matches what it came from.</p>
+
+<p><strong>Generated code.</strong> The tools that list types or members take
+<code>include_compiler_generated</code>. Left false, they hide what the compiler or a source
+generator created: closures, lambdas, iterator and async state machines, anonymous types,
+backing fields, <code>&lt;PrivateImplementationDetails&gt;</code>, and Unity and Burst
+source-generator output.</p>
+
+<p><strong>Accessibility.</strong> The tools that list API — <code>find_types</code>,
+<code>find_methods</code>, <code>list_members</code> — take <code>accessibility</code>:
+<code>public</code>, <code>public_protected</code> (the default, which also covers
+<code>protected internal</code> and <code>private protected</code>), or <code>all</code>.
+<code>analyze</code> and <code>compare</code> are never filtered by accessibility, because an
+analysis or a comparison must see everything.</p>
+
+<p><strong>Types from other assemblies.</strong> A type the inspected assembly uses but another
+assembly defines is known to ILens by name. A tool that needs its definition says where it comes
+from — <code>System.String is not defined in this assembly; it comes from netstandard,
+Version=2.0.0.0.</code> — so you know which assembly to inspect instead. <code>analyze</code>
+answers questions about such a type from the inspected assembly's own references to it, and
+<code>list_members</code> with <code>include_inherited</code> reads the members of base classes
+from the referenced assemblies it can find.</p>
+
+<p><strong>Strict arguments.</strong> An argument name a tool does not declare is rejected with
+the list of valid names, and so is a parameter that does not apply to the question asked, such as
+<code>parameter_name</code> with a <code>kind</code> other than <code>call_sites</code>. A
+silently dropped filter would return an unfiltered answer that reads like a filtered one.</p>
 
 <h3 id="tools-discovery">Discovery</h3>
 
 <div class="tool">
 <h3><code>find_methods</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Search a whole assembly for methods matching a signature, combining any of: name substring,
-return type, parameter types, parameter count, declaring namespace, declaring type, and
-accessibility.</p>
+<p>Find methods across the assembly by name, parameter types or return type, or list one type's
+methods with <code>type_name</code>. Any combination of filters narrows the search.</p>
 <h4>Parameters</h4>
 <dl class="params">
 <dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
 <dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
-<dt><code>namePattern</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
-<dd>Case-insensitive substring filter on method name.</dd>
-<dt><code>returns</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
-<dd>Return-type pattern, e.g. <code>bool</code>, <code>IEnumerable</code>, <code>String</code>.</dd>
-<dt><code>parameterTypes</code> <span class="badge badge-optional">optional</span> <code>string[]</code></dt>
-<dd>Ordered parameter-type patterns. The method must have exactly this many parameters, each
-matching the pattern at its position.</dd>
-<dt><code>parameterCount</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
-<dd>Exact parameter count. If <code>parameterTypes</code> is also set, the two must agree.</dd>
-<dt><code>declaringNamespace</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
-<dd>Exact declaring namespace, e.g. <code>System.IO</code>.</dd>
-<dt><code>declaringType</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
-<dd>Exact fully qualified declaring type, e.g. <code>System.IO.File</code>. Nested types take
-<code>+</code> or <code>.</code>. Mutually exclusive with <code>declaringTypePattern</code>.</dd>
-<dt><code>declaringTypePattern</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
-<dd>Case-insensitive substring filter on the declaring type's short name.</dd>
-<dt><code>accessibility</code> <span class="badge badge-optional">optional</span> <code>Public | PublicProtected | All</code></dt>
-<dd>Accessibility filter. Default <code>PublicProtected</code>.</dd>
+<dt><code>name_contains</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Case-insensitive substring of the method's name, without namespace or declaring type.</dd>
+<dt><code>return_type</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Return-type pattern, matched by the rules of <code>parameter_types</code>.</dd>
+<dt><code>parameter_types</code> <span class="badge badge-optional">optional</span> <code>string[]</code></dt>
+<dd>Parameter-type patterns, in order; the method takes exactly these. See
+<a href="#tools-conventions">type patterns</a>.</dd>
+<dt><code>parameter_count</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
+<dd>Number of parameters the method takes. If <code>parameter_types</code> is also given, the two
+must agree.</dd>
+<dt><code>namespace</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Exact namespace of the declaring type, e.g. <code>System.IO</code>; its sub-namespaces are
+not included.</dd>
+<dt><code>type_name</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Fully qualified declaring type, e.g. <code>System.IO.File</code>. An exact name asserts the
+type exists, so a name that resolves to no type is an error rather than an empty list.</dd>
+<dt><code>type_name_contains</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Case-insensitive substring of the declaring type's name, without namespace; cannot be
+combined with <code>type_name</code>. Matching nothing is an ordinary empty result.</dd>
+<dt><code>accessibility</code> <span class="badge badge-optional">optional</span> <code>public | public_protected | all</code></dt>
+<dd>Default <code>public_protected</code>, which also covers <code>protected internal</code> and
+<code>private protected</code>; <code>all</code> adds internal and private.</dd>
+<dt><code>include_compiler_generated</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
+<dd>Include what the compiler or a source generator created, such as names starting with
+<code>&lt;</code>. Default <code>false</code>.</dd>
 <dt><code>limit</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
-<dd>Cap on result lines. Default 50.</dd>
+<dd>Maximum number of results to list. Default 100.</dd>
 </dl>
 <h4>Returns</h4>
-<p>A count line followed by one signature per line, sorted by declaring type then method name,
-or <code>No methods match ...</code>. Type patterns match by short or full name, generics are
-erased at the top level, <code>Nullable&lt;T&gt;</code> is unwrapped, and arrays take a
-<code>[]</code> suffix. Constructors and property/event accessors are excluded; operators
-(<code>op_*</code>) are included.</p>
+<p>A count line, then one method per line, sorted: <code>static</code> when it is, then the
+method in reference form and its return type:</p>
+<pre><code>1 method:
+ICSharpCode.Decompiler.CSharp.CSharpDecompiler.DecompileTypeAsString(FullTypeName) → string</code></pre>
+<p>That is the form <code>decompile</code> and <code>analyze</code> take, and a parameter list
+copied from it works as <code>parameter_types</code>. Constructors appear as <code>.ctor</code>
+and operators as <code>op_*</code>. Property and event accessors are left out;
+<code>decompile</code> and <code>analyze</code> reach one by its IL name, such as
+<code>get_Count</code>. No match: <code>No methods</code>.</p>
 <h4>Errors</h4>
 <ul class="tight">
-<li>Both <code>declaringType</code> and <code>declaringTypePattern</code> given — they are
-mutually exclusive.</li>
-<li><code>declaringType</code> names a type that does not exist. An exact name asserts the type
-is real, so a typo is an error rather than an empty result.</li>
-<li><code>parameterCount</code> contradicts <code>parameterTypes.Length</code>.</li>
+<li>Both <code>type_name</code> and <code>type_name_contains</code> given — they are mutually
+exclusive.</li>
+<li><code>type_name</code> names no type the assembly defines, names a type it only references,
+or matches several types.</li>
+<li><code>namespace</code> names a namespace in which no type of the assembly lies, not even in a
+sub-namespace: <code>Namespace not found: ...</code></li>
+<li><code>parameter_count</code> contradicts the length of <code>parameter_types</code>.</li>
 </ul>
 <h4>See also</h4>
-<p><code>search_types</code> for finding the type first; <code>decompile_method</code> to read a
-match's body.</p>
+<p><code>find_types</code> to find the type first; <code>decompile</code> with
+<code>member_name</code> to read a match; <code>analyze</code> with <code>call_sites</code> for
+its callers.</p>
+</div>
+
+<div class="tool">
+<h3><code>find_types</code> <span class="badge badge-readonly">read-only</span></h3>
+<p>Find the types the assembly defines, by namespace or by a substring of their name; with no
+filter, every type.</p>
+<h4>Parameters</h4>
+<dl class="params">
+<dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
+<dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
+<dt><code>namespace</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Exact namespace, e.g. <code>System.IO</code>; its sub-namespaces are not included.</dd>
+<dt><code>name_contains</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Case-insensitive substring of the type's name, without namespace or declaring type.
+<code>Stream</code> finds <code>MemoryStream</code>, <code>FileStream</code> and so on.</dd>
+<dt><code>accessibility</code> <span class="badge badge-optional">optional</span> <code>public | public_protected | all</code></dt>
+<dd>Default <code>public_protected</code>, which also covers <code>protected internal</code> and
+<code>private protected</code>; <code>all</code> adds internal and private.</dd>
+<dt><code>include_compiler_generated</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
+<dd>Include what the compiler or a source generator created, such as closure classes and state
+machines. Default <code>false</code>.</dd>
+<dt><code>limit</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
+<dd>Maximum number of results to list. Default 100.</dd>
+</dl>
+<h4>Returns</h4>
+<p>A count line, then one fully qualified type name per line, sorted, in the form
+<code>type_name</code> takes:</p>
+<pre><code>87 types:
+ICSharpCode.Decompiler.TypeSystem.Accessibility
+ICSharpCode.Decompiler.TypeSystem.AccessibilityExtensions
+... (85 more; raise limit to see all)</code></pre>
+<p>No match: <code>No types</code>.</p>
+<h4>Errors</h4>
+<ul class="tight">
+<li><code>namespace</code> names a namespace in which no type of the assembly lies, not even in a
+sub-namespace: <code>Namespace not found: ...</code></li>
+</ul>
+<h4>See also</h4>
+<p><code>list_members</code> to read one result's members; <code>find_methods</code> to search by
+signature instead of by type name.</p>
 </div>
 
 <div class="tool">
@@ -464,451 +570,553 @@ argument passed to another tool must point inside one of these.</p>
 <p class="muted">None.</p>
 <h4>Returns</h4>
 <p>One configured root per line, or
-<code>No allowed roots configured. The server cannot load any assemblies.</code></p>
+<code>No allowed roots configured. The server cannot load any assemblies.</code> The server
+instructions name the same directories, the last ones only as a count when the full list would
+make them too long.</p>
 <h4>Errors</h4>
 <p class="muted">None — this tool never fails.</p>
 <h4>See also</h4>
 <p>Any tool taking an <code>assembly</code> parameter.</p>
 </div>
 
-<div class="tool">
-<h3><code>list_types</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>List every type declared in one namespace.</p>
-<h4>Parameters</h4>
-<dl class="params">
-<dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
-<dt><code>namespaceName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Namespace to list types from, e.g. <code>System.IO</code>.</dd>
-<dt><code>excludeCompilerGenerated</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
-<dd>Drop types the compiler emitted — closures, anonymous types, source-generator output.
-Default <code>true</code>.</dd>
-</dl>
-<h4>Returns</h4>
-<p>A count line followed by fully qualified type names sorted by short name, or
-<code>No types in namespace '...'</code>.</p>
-<h4>Errors</h4>
-<p class="muted">Only the shared path and budget errors.</p>
-<h4>See also</h4>
-<p><code>search_types</code> when the namespace is unknown; <code>summarize_type</code> to read
-one result's surface.</p>
-</div>
-
-<div class="tool">
-<h3><code>search_types</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Find types whose short name contains a substring, case-insensitively. The namespace is not
-part of the match, but results come back fully qualified so they can be fed straight into
-another tool.</p>
-<h4>Parameters</h4>
-<dl class="params">
-<dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
-<dt><code>pattern</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Substring matched against each type's short name. <code>Stream</code> finds
-<code>MemoryStream</code>, <code>FileStream</code>, <code>BufferedStream</code>, and so on.</dd>
-<dt><code>excludeCompilerGenerated</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
-<dd>Drop compiler-emitted types. Default <code>true</code>.</dd>
-</dl>
-<h4>Returns</h4>
-<p>A count line followed by fully qualified names, capped at 50 with a truncation marker, or
-<code>No types match '...'</code>.</p>
-<h4>Errors</h4>
-<p class="muted">Only the shared path and budget errors.</p>
-<h4>See also</h4>
-<p><code>list_types</code> once the namespace is known; <code>find_methods</code> to search by
-signature instead of by name.</p>
-</div>
-
 <h3 id="tools-inspection">Inspection</h3>
 
 <div class="tool">
 <h3><code>analyze</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Run cross-reference analysis on a type or one of its members — who calls it, who overrides
-it, who implements it, what it calls. Omit <code>memberName</code> to analyze the type
-itself.</p>
+<p>Run cross-reference analysis on a type or one of its members: who uses, reads, writes,
+instantiates, overrides or implements it, what it uses, and every call to a method with the
+arguments each call passes. Omit <code>member_name</code> to analyze the type itself.</p>
 <h4>Parameters</h4>
 <dl class="params">
 <dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
 <dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
-<dt><code>typeName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Fully qualified type name, e.g. <code>System.String</code>.</dd>
+<dt><code>type_name</code> <span class="badge badge-required">required</span> <code>string</code></dt>
+<dd>Fully qualified type name, e.g. <code>System.IO.File</code>. A type the assembly only
+references is answered from its references to it.</dd>
 <dt><code>kind</code> <span class="badge badge-required">required</span> <code>enum</code></dt>
-<dd>Which analysis to run. Valid values depend on what the symbol turns out to be:
+<dd>Which analysis to run. Valid values depend on what the symbol is:
 <ul class="tight">
-<li><strong>Type</strong> — <code>UsedBy</code>, <code>InstantiatedBy</code>,
-<code>ExposedBy</code>, <code>ExtensionMethods</code>, <code>AppliedTo</code>,
-<code>ImplementedBy</code></li>
-<li><strong>Method</strong> — <code>UsedBy</code>, <code>OverriddenBy</code>,
-<code>ImplementedBy</code>, <code>Uses</code>, <code>Implements</code></li>
-<li><strong>Property</strong> — <code>UsedBy</code>, <code>ReadBy</code>,
-<code>AssignedBy</code>, <code>Uses</code>, <code>OverriddenBy</code>,
-<code>ImplementedBy</code></li>
-<li><strong>Field</strong> — <code>ReadBy</code>, <code>AssignedBy</code></li>
-<li><strong>Event</strong> — <code>UsedBy</code>, <code>OverriddenBy</code>,
-<code>ImplementedBy</code></li>
+<li><strong>Type</strong> — <code>used_by</code>, <code>instantiated_by</code>,
+<code>exposed_by</code>, <code>extension_methods</code>, <code>applied_to</code>,
+<code>implemented_by</code></li>
+<li><strong>Method</strong> — <code>used_by</code>, <code>call_sites</code>,
+<code>overridden_by</code>, <code>implemented_by</code>, <code>uses</code>,
+<code>implements</code></li>
+<li><strong>Property</strong> — <code>used_by</code>, <code>read_by</code>,
+<code>assigned_by</code>, <code>uses</code>, <code>overridden_by</code>,
+<code>implemented_by</code></li>
+<li><strong>Field</strong> — <code>read_by</code>, <code>assigned_by</code></li>
+<li><strong>Event</strong> — <code>used_by</code>, <code>overridden_by</code>,
+<code>implemented_by</code></li>
 </ul></dd>
-<dt><code>memberName</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
-<dd>Member name. Omit to analyze the type itself.</dd>
-<dt><code>parameterCount</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
-<dd>Method overload disambiguator, relevant when <code>memberName</code> resolves to a method.</dd>
-<dt><code>parameterTypes</code> <span class="badge badge-optional">optional</span> <code>string[]</code></dt>
-<dd>Ordered parameter-type patterns to tell same-arity overloads apart. Same loose matching as
-<code>find_methods</code>.</dd>
+<dt><code>member_name</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Member name, e.g. <code>ReadAllText</code>; <code>.ctor</code> names a constructor, and
+<code>get_X</code>, <code>set_X</code>, <code>add_X</code> or <code>remove_X</code> an accessor.
+Omit to analyze the type itself.</dd>
+<dt><code>parameter_count</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
+<dd>Number of parameters the method takes, to select one overload. If
+<code>parameter_types</code> is also given, the two must agree. Needs
+<code>member_name</code>.</dd>
+<dt><code>parameter_types</code> <span class="badge badge-optional">optional</span> <code>string[]</code></dt>
+<dd>Parameter-type patterns that select one overload; see
+<a href="#tools-conventions">type patterns</a>. Needs <code>member_name</code>.</dd>
+<dt><code>parameter_name</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>With kind <code>call_sites</code>, show only the argument passed for this parameter;
+overloads without it are left out.</dd>
+<dt><code>non_default_only</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
+<dd>With <code>parameter_name</code>, keep only the calls whose argument is not provably the
+parameter's default. Default <code>false</code>.</dd>
+<dt><code>include_compiler_generated</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
+<dd>Include results the compiler or a source generator created, such as names starting with
+<code>&lt;</code>. Default <code>false</code>.</dd>
 <dt><code>limit</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
-<dd>Cap on result lines. Default 50.</dd>
+<dd>Maximum number of results to list. Default 100.</dd>
 </dl>
 <h4>Returns</h4>
-<p>A header naming the analysis and the resolved symbol, then one fully qualified reference per
-line, or <code>(no results)</code>.</p>
-<p>On a property or event the usage questions are answered through the accessors, because that
-is what call sites actually reference: <code>ReadBy</code> consults the getter,
-<code>AssignedBy</code> the setter, <code>UsedBy</code> both, and <code>Uses</code> both for the
-outgoing direction. On an event, <code>UsedBy</code> covers the add, remove, and invoke
-accessors and — for an ordinary field-like event — the field holding the subscriber list, so the
-answer includes the code that <em>raises</em> the event and not just the code that subscribes.
-The header names what was consulted, e.g. <code>(via get_X, set_X)</code>.</p>
+<p>A header that counts the results in the kind's own words, then one result per line in
+reference form, sorted:</p>
+<pre><code>1 user of ICSharpCode.Decompiler.CSharp.CSharpDecompiler.DecompileType(FullTypeName) [declared]:
+ICSharpCode.Decompiler.CSharp.CSharpDecompiler.DecompileTypeAsString(FullTypeName)</code></pre>
+<p>The other kinds count readers of, writers of, symbols instantiating, members exposing,
+extension methods for, symbols marked with, overrides of, implementations of, symbols used by,
+interface members implemented by, and calls to. A member's header says where it was found:
+<code>[declared]</code>, <code>[inherited from Base]</code>, or <code>[extension method on
+X]</code>. No result: <code>No users of ...</code>, in the same words. A use inside a lambda,
+local function, iterator or async method is reported under the member it was written in, and a
+use inside an accessor under its property or event.</p>
+<p><strong>Fields.</strong> <code>read_by</code> and <code>assigned_by</code> on a field follow
+every use of it, including the uses that take its address: calling a method on a struct field,
+passing the field by <code>ref</code>, or writing one of its members. When the code that
+receives the address is in the inspected assembly, ILens reads it to decide, and a method of a
+framework type that never changes its value, such as <code>int</code> or
+<code>DateTime</code>, only reads it. Otherwise ILens cannot tell whether the field is read or
+written, so the method is listed under both questions, and its line names what received the
+address:</p>
+<pre><code>FieldAccess.Holder.ParseNumber(string) (may write: passes it by ref to System.Int32.TryParse(string, ref int))</code></pre>
+<p>The <code>read_by</code> answer marks the same line <code>(may read: ...)</code>.</p>
+<p><strong>Properties and events.</strong> On a property or event, the usage questions are
+answered through the accessors, because that is what call sites reference: <code>read_by</code>
+consults the getter, <code>assigned_by</code> the setter, <code>used_by</code> both, and
+<code>uses</code> both for the outgoing direction. On an event, <code>used_by</code> covers the
+add, remove and invoke accessors and, for an ordinary field-like event, the field holding its
+subscriber list, so the answer includes the code that <em>raises</em> the event and not only the
+code that subscribes. The header names what was consulted:
+<code>(via get_Level, set_Level)</code>.</p>
+<p><strong>Call sites.</strong> <code>call_sites</code> lists every call to a method, one per
+line as the calling member, a colon, and the call, and covers all overloads of the name unless a
+hint selects one:</p>
+<pre><code>8 calls to CallShapes.Mailbox.Send (2 overloads):
+CallShapes.Senders.ExplicitDefault(Mailbox): box.Send("explicit")
+CallShapes.Senders.InIterator(Mailbox): box.Send("iterator", null, 900)
+CallShapes.Senders.InLambda(Mailbox): box.Send("lambda")
+CallShapes.Senders.Named(Mailbox): box.Send("named", null, 600)
+... (4 more; raise limit to see all)</code></pre>
+<p>A call is written as decompiled C# with its arguments in parameter order, so it need not
+read as the source spelled it: a named or reordered argument stands at its parameter's position,
+with the defaults the compiler filled in before it, trailing arguments equal to their default are
+left out, and a call to an extension method is written as a static call with the receiver as its
+first argument, such as <code>Stamps.Stamp(box, "once")</code> for
+<code>box.Stamp("once")</code>. With <code>parameter_name</code>, each line shows only the
+argument that parameter receives, as the compiler bound it, so an omitted argument shows the
+parameter's default; a value that provably is the default is marked <code>(default)</code>.
+<code>non_default_only</code> keeps the other calls, and its header says how many of all calls
+they are.</p>
+<p>Every call is counted twice, once in the IL and once in the decompiled C#. A caller whose
+counts differ is reported on a line of its own rather than dropped, so an empty answer is a
+proof of absence:</p>
+<pre><code>Not shown: 1 of 1 call in CallShapes.Senders.AsOperator(Mailbox, Parcel), which the decompiled C# does not show as a call</code></pre>
+<p>A caller that fails to decompile is reported the same way, and one whose decompiled C# shows
+more calls than its IL holds on a <code>Check:</code> line.</p>
+<p><strong>Overrides.</strong> C# compiles a call to a virtual method as a call to the
+declaration that introduced it, not to an override. <code>call_sites</code> on an override
+therefore lists the calls whose receiver's type is the override's class or derives from it,
+including calls through <code>base.</code>, and <code>used_by</code> on an override lists only
+what refers to the override itself. Both end with a line naming the declaration code calls:</p>
+<pre><code>3 calls to CallShapes.Animal.Die(int):
+CallShapes.Dog.Die(int): base.Die(cause + 1)
+CallShapes.Undertaker.OnAnimal(Animal): animal.Die(2)
+CallShapes.Undertaker.OnDog(Dog): dog.Die(3)
+Override: code calls CallShapes.Creature.Die(int) instead; listed are those calls whose receiver's type is CallShapes.Animal or derives from it.</code></pre>
+<p>When that declaration lies in another assembly, the line says so, and <code>call_sites</code>
+cannot count the calls made through it. A member that implements an interface member explicitly
+is never called by name, so the usage kinds end with a line naming the interface member code
+reaches it through:
+<code>Explicit implementation: code reaches it only through ExplicitMembers.IShape.Area(); ask
+about that member for its uses.</code></p>
+<p><strong>Types from other assemblies.</strong> For a type the assembly does not define, every
+type kind and <code>used_by</code>, <code>read_by</code> and <code>assigned_by</code> on a member
+are answered from the inspected assembly's references. An empty answer about a name nothing in
+the assembly names adds <code>This assembly neither defines nor references a type of that
+name.</code>, and one about a member it does not reference lists the members it does.</p>
 <h4>Errors</h4>
 <ul class="tight">
-<li>The requested <code>kind</code> does not apply to the symbol's category. The message lists
-the kinds that do.</li>
-<li><code>AppliedTo</code> on a type that does not derive from <code>System.Attribute</code> — an
-empty result would be indistinguishable from an attribute applied nowhere.</li>
-<li><code>ImplementedBy</code> on a type that is not an interface, for the same reason.</li>
-<li><code>ReadBy</code> on a write-only property, or <code>AssignedBy</code> on a read-only one:
-the accessor the question resolves to does not exist.</li>
-<li>The member name exists as more than one member kind on the type — genuinely ambiguous
-metadata, reported rather than silently resolved.</li>
-<li>No overload matches the supplied <code>parameterCount</code> / <code>parameterTypes</code>;
-the message lists the candidates found across the inheritance chain.</li>
-<li>The type or member does not exist.</li>
+<li>The <code>kind</code> does not apply to the symbol's category:
+<code>Analysis kind 'read_by' is not valid for Method. Valid kinds for Method: ...</code></li>
+<li><code>applied_to</code> on a type that does not derive from <code>System.Attribute</code>,
+and <code>implemented_by</code> on a type that is not an interface — an empty result would be
+indistinguishable from "applied nowhere" or "implemented nowhere". For a type from another
+assembly, <code>implemented_by</code> errors only when the inspected assembly derives a class
+from it.</li>
+<li><code>read_by</code> on a write-only property, or <code>assigned_by</code> on a read-only
+one: the accessor the question resolves to does not exist.</li>
+<li>A property or event that declares no accessors, which only malformed metadata produces.</li>
+<li><code>parameter_name</code> or <code>non_default_only</code> with a kind other than
+<code>call_sites</code>; <code>non_default_only</code> without <code>parameter_name</code>; a
+<code>parameter_name</code> no overload has (the message lists the parameters); and
+<code>non_default_only</code> for a parameter without a default value.</li>
+<li><code>parameter_count</code> or <code>parameter_types</code> without
+<code>member_name</code>.</li>
+<li>On a member of a type from another assembly, <code>uses</code> and <code>implements</code>
+(the body is in the other assembly), <code>call_sites</code>, <code>overridden_by</code> and
+<code>implemented_by</code> are refused with the reason, and a type-only kind is refused with a
+member name.</li>
+<li>The member does not resolve, or a base class from another assembly declares it — see the
+member-name errors under <a href="#troubleshooting">Troubleshooting</a>.</li>
 </ul>
 <h4>See also</h4>
-<p><code>decompile_method</code> to read a caller's body; <code>find_methods</code> for
-name-shaped rather than reference-shaped search.</p>
+<p><code>decompile</code> to read a result's body; <code>find_methods</code> for name-shaped
+rather than reference-shaped search.</p>
 </div>
 
 <div class="tool">
 <h3><code>find_harmony_dependencies</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Extract the full reflective surface of a Harmony-patching assembly as JSON: every patch
-target and every reflective field access. Built to answer "do my patches still bind on game
-version X?" — pair it with <code>compare_method</code> against two versions of the host
-assembly.</p>
+<p>List what a Harmony-patching assembly depends on: every patch target, from
+<code>[HarmonyPatch]</code> attributes, <code>TargetMethod</code> or <code>TargetMethods</code>
+bodies and <code>Harmony.Patch</code> calls, and every field it reaches through
+<code>AccessTools</code>, <code>Traverse</code> or <code>Type.GetField</code>, or takes as a
+<code>___name</code> patch parameter. Built to answer "do my patches still bind on the new
+version?"</p>
+<p><a href="https://github.com/pardeike/Harmony">Harmony</a>, by Andreas Pardeike, is the library
+mods use to patch .NET methods at run time. ILens reads its attributes and calls in an assembly
+without including or running Harmony.</p>
 <h4>Parameters</h4>
 <dl class="params">
 <dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
 <dd>Path to the Harmony-patching assembly to scan (must be under an allowed root).</dd>
+<dt><code>limit</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
+<dd>Maximum number of results to list. Default 100.</dd>
 </dl>
 <h4>Returns</h4>
-<p>Indented JSON of the shape <code>{ patches: [...], fieldAccesses: [...] }</code>. Each patch
-carries <code>targetType</code>, <code>targetMember</code>, optional <code>paramTypes</code> and
-<code>methodType</code>, <code>patchType</code>, <code>resolutionKind</code>,
-<code>patchClass</code>, and <code>patchSite</code>. <code>resolutionKind</code> is one of
-<code>TypedAttribute</code>, <code>StringTargeted</code>, <code>Attribute</code>,
-<code>TargetMethod</code>, <code>TargetMethods</code>, or <code>DynamicTargetMethod</code>; each
-field access carries an <code>accessor</code> of <code>AccessToolsField</code>,
-<code>FieldRefAccess</code>, or <code>TraverseField</code>.</p>
-<p>Telling <code>TypedAttribute</code> from <code>StringTargeted</code> requires probing the
-target type for member visibility, so it only fires when the target lives in the same assembly
-being scanned. Cross-assembly targets — the typical case for a mod patching a host game — fall
-back to <code>Attribute</code> regardless.</p>
+<p>A count line, then one dependency per line, sorted by target so that everything depending on
+one member stands together: the patch kind or <code>Field</code>, the target, <code>&lt;-</code>,
+the method that depends on it, and in brackets how the target was found:</p>
+<pre><code>Prefix HarmonyMod.TargetA.Compute(int) &lt;- HarmonyMod.FieldAccessPatch.Prefix [TypedAttribute]
+Postfix HarmonyMod.TargetA.PrivateMethod &lt;- HarmonyMod.StringTargetedPatch.Postfix [StringTargeted]
+Field HarmonyMod.TargetI.count &lt;- HarmonyMod.InjectedFieldsPatch.Prefix [Injected]
+Prefix HarmonyMod.TargetK.Run &lt;- HarmonyMod.ManualPatches.BeforeRun [PatchCall in HarmonyMod.ManualPatches.Apply]</code></pre>
+<p>The patch kinds are <code>Prefix</code>, <code>Postfix</code>, <code>Transpiler</code>,
+<code>Finalizer</code> and <code>ReversePatch</code>, found as Harmony finds them: by the
+method's name or by its marker attribute, such as <code>[HarmonyPrefix]</code>. A class counts
+as a patch class when it carries <code>[HarmonyPatch]</code>, has a <code>TargetMethod</code> or
+<code>TargetMethods</code>, or has a patch method carrying a <code>[HarmonyPatch]</code> of its
+own. A patch target is found by one of these:</p>
+<table>
+<thead>
+<tr><th>Label</th><th>Where the target comes from</th></tr>
+</thead>
+<tbody>
+<tr><td><code>TypedAttribute</code>, <code>StringTargeted</code>, <code>Attribute</code></td>
+<td>The <code>[HarmonyPatch]</code> attributes on the patch class and the patch method, merged as
+Harmony merges them. How the three are told apart is explained below.</td></tr>
+<tr><td><code>TargetMethod</code></td><td>The one target a <code>TargetMethod</code> returns.</td></tr>
+<tr><td><code>DynamicTargetMethod</code></td><td>A <code>TargetMethod</code> with more than one
+target, typically chosen by a ternary or a switch, or with a target the scan cannot read, so its
+binding depends on the branch taken at run time.</td></tr>
+<tr><td><code>TargetMethods</code></td><td>Each target a <code>TargetMethods</code> returns or
+yields.</td></tr>
+<tr><td><code>TargetMethodSearch</code>, <code>TargetMethodsSearch</code></td><td>A target the
+body finds by searching one class's methods for an exact name. The line names no overload, since
+the search's own tests pick one.</td></tr>
+<tr><td><code>PatchCall in X</code>, <code>PatchCallSearch in X</code></td><td>A
+<code>Harmony.Patch</code> call: a line for each patch method it passes, of the kind its
+argument's position gives, and each target. <code>X</code> is the member that writes the values
+out: the calling member, or the caller or construction its values come through. The
+<code>Search</code> form marks a target found by a search, as above.</td></tr>
+</tbody>
+</table>
+<p>A field is found by one of these, in every class of the assembly, such as the static holders
+mods keep their field references in, not only in patch classes:</p>
+<table>
+<thead>
+<tr><th>Label</th><th>Lookup</th></tr>
+</thead>
+<tbody>
+<tr><td><code>AccessToolsField</code></td><td><code>AccessTools.Field</code>, which also
+searches the base classes</td></tr>
+<tr><td><code>DeclaredField</code></td><td><code>AccessTools.DeclaredField</code>, which looks in
+the class alone</td></tr>
+<tr><td><code>FieldRefAccess</code>, <code>StaticFieldRefAccess</code>,
+<code>StructFieldRefAccess</code></td><td>Harmony's field-reference accessors, in all their
+overloads</td></tr>
+<tr><td><code>TraverseField</code></td><td><code>Traverse.Field</code>, also as
+<code>Field&lt;T&gt;</code></td></tr>
+<tr><td><code>GetField</code></td><td>.NET's <code>Type.GetField</code></td></tr>
+<tr><td><code>GetFields</code>, <code>GetDeclaredFields</code>, <code>GetFieldNames</code></td>
+<td>An enumeration of a class's fields, whose field is written <code>?</code></td></tr>
+<tr><td><code>Injected</code></td><td>A <code>___name</code> parameter of a prefix, postfix or
+finalizer, applied by attribute or by a <code>Harmony.Patch</code> call, through which Harmony
+hands the patch a field. It is listed on each class the patch targets; Harmony looks the field up
+in the class that declares the patched method, which differs when that method is
+inherited.</td></tr>
+</tbody>
+</table>
+<p>Harmony's extension spelling of a lookup, <code>typeof(X).Method("Y")</code>, counts as the
+lookup it spells. Targets are written as the other tools name them. A target carries its
+parameter types where the patch pins an overload; without them the line names no overload. A
+getter or setter patch names the accessor, <code>get_X</code> or <code>set_X</code>; an indexer
+patch the indexer's accessor, named from the class when the scanned assembly defines it and
+otherwise by C#'s default, <code>get_Item</code> or <code>set_Item</code>, with <code>?</code>
+for a setter's value type it cannot read; an event patch <code>add_X</code> or
+<code>remove_X</code>; a constructor patch <code>.ctor</code> or <code>.cctor</code>, written
+<code>.ctor()</code> without argument types because Harmony then binds the parameterless one; a
+finalizer patch <code>Finalize</code>; and an operator patch the operator's method, such as
+<code>op_Addition</code>. A method kind the name does not show follows in parentheses, as in
+<code>HarmonyMod.TargetH.Items (Enumerator)</code>.</p>
+<p>In <code>TargetMethod</code> and <code>TargetMethods</code> bodies, <code>Harmony.Patch</code>
+calls and field lookups alike, the scan reads a method from AccessTools' method,
+property-accessor and constructor lookups, <code>AccessTools.EnumeratorMoveNext</code> and
+<code>AsyncMoveNext</code>, <code>Type.GetMethod</code>, a property's accessor taken from its
+<code>PropertyInfo</code>, the method a <code>SymbolExtensions.GetMethodInfo</code> lambda calls,
+and a search of one class's methods by an exact name, each also when the code makes a generic
+method of it with <code>MakeGenericMethod</code>. It reads a class from <code>typeof</code>; from
+text, as in <code>"Namespace.Type:Member"</code>, <code>AccessTools.TypeByName</code>,
+<code>Type.GetType</code> and <code>Assembly.GetType</code>; from <code>AccessTools.Inner</code>
+or <code>GetNestedType</code> for a nested class; and from <code>GetType()</code> on the calling
+object, read as the class that declares the calling member. It follows a value back to where the
+assembly writes it: through locals, through a helper's parameters to each call of the helper,
+through the fields of a patch object to each place that builds it, through the mod's own methods
+to what they return, and through a list of names the code writes out and loops over. A
+<code>Traverse</code> takes the class the decompiler gives the object it was created from; that
+is a static type, so it names a base class when the field is declared in a subclass.</p>
+<p>What the scan cannot read prints <code>?</code> instead of being left out, so a missing line
+is a proof of absence. A target it cannot determine is <code>?</code>. A field is written
+<code>?.name</code> or <code>Class.?</code> when one part is unread, and <code>?</code> when both
+are; a field name a helper takes from its callers gets a line of its own, <code>?.name</code>
+while the class stays unread. A <code>Harmony.Patch</code> call the IL shows but the decompiled
+code does not prints <code>? ? &lt;- ? [PatchCall in X]</code>, and such a field lookup a
+<code>Field ?</code> line. Two arguments of one call that each have several values are not
+paired, and the call reads as <code>?</code>. A <code>TargetMethod</code>'s targets are the
+values it returns or yields: one it cannot read adds a <code>?</code> line beside the targets it
+reads, so an incomplete list says so, while a lookup that only serves a condition counts for
+nothing. A lookup that takes a <code>FieldInfo</code> prints nothing, since that
+<code>FieldInfo</code> comes from a lookup listed on its own. Nothing found:
+<code>No dependencies</code>.</p>
+<p><code>TypedAttribute</code> and <code>StringTargeted</code> tell a target named through
+<code>typeof</code> and <code>nameof</code> from one named by a string, which breaks silently
+when the member is renamed. ILens tells them apart by whether the named member is public on the
+target class, since <code>nameof</code> cannot reach a non-public member, and it can check that
+only when the target class lives in the scanned assembly. A class named by a string, through
+<code>HarmonyPatch(string typeName, string methodName, MethodType)</code>, is
+<code>StringTargeted</code> wherever it lives, and a patch Harmony binds by its kind alone, on a
+constructor, finalizer, operator or indexer, is <code>TypedAttribute</code> wherever it lives,
+since <code>typeof</code> then names the whole target. Other targets in another assembly, the
+usual case for a mod, show as <code>Attribute</code>. Only Harmony 2.x, the
+<code>HarmonyLib</code> namespace, is recognized.</p>
 <h4>Errors</h4>
 <p class="muted">Only the shared path and budget errors.</p>
 <h4>See also</h4>
-<p><code>compare_method</code> and <code>list_changed_types</code> for checking the host
-assembly across versions.</p>
+<p><code>compare</code> against two versions of the patched assembly, to see whether each target
+still exists and what changed in it.</p>
 </div>
 
 <div class="tool">
 <h3><code>list_members</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>List a type's members grouped by kind — methods, properties, fields, events — one signature
-per line, no bodies. Cheaper than <code>summarize_type</code> when only part of the surface is
-needed.</p>
+<p>List a type's members, grouped by kind, one declaration per line without bodies.</p>
 <h4>Parameters</h4>
 <dl class="params">
 <dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
 <dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
-<dt><code>typeName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Fully qualified type name.</dd>
-<dt><code>kinds</code> <span class="badge badge-optional">optional</span> <code>("Method" | "Property" | "Field" | "Event")[]</code></dt>
-<dd>Member kinds to include. Omit for all four.</dd>
-<dt><code>accessibility</code> <span class="badge badge-optional">optional</span> <code>Public | PublicProtected | All</code></dt>
-<dd>Accessibility filter. Default <code>PublicProtected</code>.</dd>
-<dt><code>namePattern</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
-<dd>Case-insensitive substring filter on member name.</dd>
-<dt><code>includeInherited</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
-<dd>Include members declared on base types, stopping at <code>System.Object</code>. Default
-<code>false</code>. Inherited entries are tagged with the type they came from.</dd>
+<dt><code>type_name</code> <span class="badge badge-required">required</span> <code>string</code></dt>
+<dd>Fully qualified type name, e.g. <code>System.IO.File</code>.</dd>
+<dt><code>kinds</code> <span class="badge badge-optional">optional</span> <code>("method" | "property" | "field" | "event" | "nested_type")[]</code></dt>
+<dd>Kinds of member to list, all when omitted.</dd>
+<dt><code>accessibility</code> <span class="badge badge-optional">optional</span> <code>public | public_protected | all</code></dt>
+<dd>Default <code>public_protected</code>, which also covers <code>protected internal</code> and
+<code>private protected</code>; <code>all</code> adds internal and private.</dd>
+<dt><code>name_contains</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Case-insensitive substring of the member's name.</dd>
+<dt><code>include_inherited</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
+<dd>Include members declared on base types, stopping at <code>System.Object</code>, including
+base classes another assembly defines. Default <code>false</code>.</dd>
+<dt><code>include_compiler_generated</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
+<dd>Include what the compiler or a source generator created, such as backing fields. Default
+<code>false</code>.</dd>
 <dt><code>limit</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
-<dd>Cap on total result lines across all kinds. Default 100.</dd>
+<dd>Maximum number of members to list, counted across all groups. Default 100.</dd>
 </dl>
 <h4>Returns</h4>
-<p>The type name, then a section per non-empty kind with its own count, then a truncation marker
-if the limit cut the listing short. When nothing matches:
-<code>No members on ... match the filter</code>.</p>
+<p>A header with the total and the type's declaration and base types, then a count line per
+non-empty kind and its members, sorted by name with constructors first:</p>
+<pre><code>5 members of public class BaseShift.Gauge:
+1 method:
+  public Gauge()
+3 properties:
+  public int Level { get; set; }
+  public int Limit { get; set; }
+  public int Steady { get; set; }
+1 event:
+  public event EventHandler Changed</code></pre>
+<p>A constructor is listed under the type's name among the methods. A member inherited from a
+base type is marked <code>[from Base]</code>, and an override hides the declaration it
+overrides; an obsolete member is marked <code>[Obsolete]</code>. A constant shows its value, and
+an accessor its own accessibility where it differs from the property's. No match:
+<code>No members of public class ...</code>.</p>
+<p>With <code>include_inherited</code>, the members of a base class another assembly defines are
+read from that assembly, found beside the inspected one, at the top of an allowed folder, or in
+the installed .NET; an enum or a struct thereby also lists what <code>System.Enum</code> or
+<code>System.ValueType</code> declares. A base class whose assembly ILens cannot load ends the
+list with a line naming it:</p>
+<pre><code>3 members of public class ExternalUser.DerivedWidget : Widget:
+2 methods:
+  public DerivedWidget()
+  public override void Draw()
+1 property:
+  public int Size { get; set; }
+Not shown: what ExternalLib.Widget and its base types declare; ILens could not load ExternalLib, Version=1.0.0.0</code></pre>
 <h4>Errors</h4>
 <ul class="tight">
-<li>The type does not exist.</li>
-<li>An unrecognized value in <code>kinds</code>.</li>
+<li>The type does not resolve — see <a href="#troubleshooting">Troubleshooting</a>.</li>
 </ul>
 <h4>See also</h4>
-<p><code>summarize_type</code> for the whole public surface in one call;
-<code>decompile_type</code> when bodies are needed.</p>
-</div>
-
-<div class="tool">
-<h3><code>summarize_type</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Summarize the public and protected API surface of a type — signatures only, method bodies
-stripped. The cheapest way to see what a type offers.</p>
-<h4>Parameters</h4>
-<dl class="params">
-<dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
-<dt><code>typeName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Fully qualified type name, e.g. <code>System.String</code>.</dd>
-</dl>
-<h4>Returns</h4>
-<p>A C# type declaration with its public and protected members, bodies removed.</p>
-<h4>Errors</h4>
-<ul class="tight">
-<li>The type does not exist.</li>
-</ul>
-<h4>See also</h4>
-<p><code>list_members</code> for a filtered subset; <code>decompile_type</code> for full
-source.</p>
+<p><code>decompile</code> when bodies are needed; <code>find_methods</code> with
+<code>type_name</code> for a type's methods in the form the other tools take.</p>
 </div>
 
 <h3 id="tools-decompilation">Decompilation</h3>
 
 <div class="tool">
-<h3><code>decompile_event</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Decompile one event by its plain name and get back the full C# event declaration with its
-add and remove accessor bodies.</p>
+<h3><code>decompile</code> <span class="badge badge-readonly">read-only</span></h3>
+<p>Decompile a type, or one of its members, to C#. Omit <code>member_name</code> for the whole
+type.</p>
 <h4>Parameters</h4>
 <dl class="params">
 <dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
 <dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
-<dt><code>typeName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Fully qualified type name, e.g. <code>System.IO.FileSystemWatcher</code>.</dd>
-<dt><code>eventName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Event name without an IL prefix, e.g. <code>Changed</code>.</dd>
-</dl>
-<h4>Returns</h4>
-<p>A comment header naming the event (and the base type it was inherited from, when it was not
-declared on the requested type), then the decompiled declaration.</p>
-<h4>Errors</h4>
-<ul class="tight">
-<li>The type does not exist.</li>
-<li>The event is not declared on the type or any base type.</li>
-<li>More than one event on the type carries that name — possible only in non-C# metadata; the
-candidates are listed.</li>
-</ul>
-<h4>See also</h4>
-<p><code>decompile_method</code> with <code>add_X</code> / <code>remove_X</code> for a single
-accessor; <code>analyze</code> with <code>UsedBy</code> for subscribers and raise sites.</p>
-</div>
-
-<div class="tool">
-<h3><code>decompile_method</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Decompile a single method to C#. Faster and far cheaper than <code>decompile_type</code> when
-only one body is needed.</p>
-<h4>Parameters</h4>
-<dl class="params">
-<dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
-<dt><code>typeName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
+<dt><code>type_name</code> <span class="badge badge-required">required</span> <code>string</code></dt>
 <dd>Fully qualified type name, e.g. <code>System.IO.File</code>.</dd>
-<dt><code>methodName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Method name, e.g. <code>ReadAllText</code>. Property and event accessors are reachable by
-their IL name — <code>get_X</code>, <code>set_X</code>, <code>add_X</code>,
-<code>remove_X</code> — even though <code>find_methods</code> hides them from generic
-browsing.</dd>
-<dt><code>parameterCount</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
-<dd>Number of parameters, to disambiguate overloads. If <code>parameterTypes</code> is also
-given, the two must agree.</dd>
-<dt><code>parameterTypes</code> <span class="badge badge-optional">optional</span> <code>string[]</code></dt>
-<dd>Ordered parameter-type patterns for same-arity overloads, e.g. <code>['int','bool']</code>.
-Same loose matching as <code>find_methods</code>.</dd>
+<dt><code>member_name</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Member name, e.g. <code>ReadAllText</code>; <code>.ctor</code> names a constructor, and
+<code>get_X</code>, <code>set_X</code>, <code>add_X</code> or <code>remove_X</code> an
+accessor.</dd>
+<dt><code>parameter_count</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
+<dd>Number of parameters the method takes, to select one overload. If
+<code>parameter_types</code> is also given, the two must agree.</dd>
+<dt><code>parameter_types</code> <span class="badge badge-optional">optional</span> <code>string[]</code></dt>
+<dd>Parameter-type patterns that select one overload, e.g. <code>["int", "bool"]</code>; see
+<a href="#tools-conventions">type patterns</a>.</dd>
 </dl>
 <h4>Returns</h4>
-<p>A comment header carrying the <em>resolved</em> signature — parameter types and return type,
-plus an inherited or extension-method note where relevant — followed by the decompiled body. The
-header reports what resolution actually picked, so a mismatch against what was asked for is
-visible without reading IL.</p>
-<h4>Errors</h4>
-<ul class="tight">
-<li>The type does not exist.</li>
-<li>No method of that name on the type, its base types, or as an extension method.</li>
-<li>No overload satisfies the supplied hint; the candidates found across the inheritance chain
-are listed.</li>
-<li>Several overloads match and the hint cannot narrow further; the candidates are listed.</li>
-<li>An accessor name was given for a property or event that has no such accessor.</li>
-<li><code>parameterCount</code> contradicts <code>parameterTypes.Length</code>.</li>
-</ul>
-<h4>See also</h4>
-<p><code>decompile_property</code> / <code>decompile_event</code> for whole declarations;
-<code>analyze</code> with <code>UsedBy</code> for callers.</p>
-</div>
+<p>Without <code>member_name</code>, the whole type as C# — the most expensive read in the tool
+set. With it, a comment naming what resolution picked, then the code:</p>
+<pre><code>// ICSharpCode.Decompiler.CSharp.CSharpDecompiler.DecompileTypeAsString(FullTypeName) → string
+using ICSharpCode.Decompiler.TypeSystem;
 
-<div class="tool">
-<h3><code>decompile_property</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Decompile one property by its plain name and get back the full C# property declaration with
-its accessor bodies.</p>
-<h4>Parameters</h4>
-<dl class="params">
-<dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
-<dt><code>typeName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Fully qualified type name, e.g. <code>System.IO.FileInfo</code>.</dd>
-<dt><code>propertyName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Property name without an IL prefix, e.g. <code>Length</code>.</dd>
-</dl>
-<h4>Returns</h4>
-<p>A comment header naming the property (and the base type it was inherited from, when
-applicable), then the decompiled declaration.</p>
+public string DecompileTypeAsString(FullTypeName fullTypeName)
+{
+	return SyntaxTreeToString(DecompileType(fullTypeName));
+}</code></pre>
+<p>The comment carries a method's parameter and return types, so a mismatch against what was
+asked for is visible, and names the origin when the member is not declared on the type asked
+about: <code>[inherited from Base]</code> or <code>[extension method on X]</code>. A method or an
+accessor gives its body. A property or event name gives the whole declaration with its accessor
+bodies, and a field name the field's declaration with the initializer the compiler moved into
+the constructors. A member that implements an interface member explicitly is reached by the
+interface member's plain name when no ordinary member has that name. A member that a base class
+from another assembly declares is not decompiled here: the error names the file that holds
+it.</p>
 <h4>Errors</h4>
 <ul class="tight">
-<li>The type does not exist.</li>
-<li>The property is not declared on the type or any base type.</li>
-<li>The name matches several properties — in C# always an indexer with multiple overloads. The
-candidates are listed, along with a pointer to <code>decompile_method</code> on
-<code>get_Item</code> / <code>set_Item</code> with <code>parameterTypes</code>.</li>
+<li><code>parameter_count</code> or <code>parameter_types</code> without
+<code>member_name</code>.</li>
+<li>No member of that name on the type, its base types, or as an extension method.</li>
+<li>Several overloads match and the hint cannot narrow them, or no overload satisfies the hint;
+the message lists the candidates found across the inheritance chain.</li>
+<li>The name exists as more than one kind of member, as several indexers (name one by its
+accessor, <code>get_Item</code> or <code>set_Item</code>, with <code>parameter_types</code>), or
+as several explicit interface implementations (pass the full name of one).</li>
+<li>An accessor name for a property or event without that accessor:
+<code>Property 'Count' on ... has no setter.</code></li>
+<li>The member is declared on a base class another assembly defines; see
+<a href="#troubleshooting">Troubleshooting</a>.</li>
+<li><code>parameter_count</code> contradicts the length of <code>parameter_types</code>.</li>
 </ul>
 <h4>See also</h4>
-<p><code>decompile_method</code> with <code>get_X</code> / <code>set_X</code> for one accessor;
-<code>analyze</code> with <code>ReadBy</code> or <code>AssignedBy</code> for call sites.</p>
-</div>
-
-<div class="tool">
-<h3><code>decompile_type</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Decompile a whole type to C# source, including every method body. The most expensive read in
-the tool set — reach for it only when the narrower tools will not do.</p>
-<h4>Parameters</h4>
-<dl class="params">
-<dt><code>assembly</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
-<dt><code>typeName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Fully qualified type name, e.g. <code>System.IO.File</code>.</dd>
-</dl>
-<h4>Returns</h4>
-<p>Full C# source for the type.</p>
-<h4>Errors</h4>
-<ul class="tight">
-<li>The type does not exist.</li>
-</ul>
-<h4>See also</h4>
-<p><code>summarize_type</code> for signatures only; <code>decompile_method</code> for one
-body.</p>
+<p><code>list_members</code> first, to see what a type has without paying for bodies;
+<code>analyze</code> for who uses what you are reading.</p>
 </div>
 
 <h3 id="tools-comparison">Comparison</h3>
 
 <div class="tool">
-<h3><code>compare_method</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Compare one method across two assemblies and emit each body labeled by source. When the two
-bodies are identical it emits a single copy with a note rather than duplicating the text.</p>
+<h3><code>compare</code> <span class="badge badge-readonly">read-only</span></h3>
+<p>Compare two versions of an assembly, from the types that differ down to one method: without
+<code>type_name</code> the changed types, with <code>type_name</code> that type's member changes,
+and with <code>member_name</code> the method's or accessor's two bodies, or only a verdict when
+they print alike.</p>
 <h4>Parameters</h4>
 <dl class="params">
-<dt><code>assemblyA</code> <span class="badge badge-required">required</span> <code>string</code></dt>
+<dt><code>assembly_a</code> <span class="badge badge-required">required</span> <code>string</code></dt>
 <dd>Path to the first assembly (must be under an allowed root).</dd>
-<dt><code>assemblyB</code> <span class="badge badge-required">required</span> <code>string</code></dt>
+<dt><code>assembly_b</code> <span class="badge badge-required">required</span> <code>string</code></dt>
 <dd>Path to the second assembly (must be under an allowed root).</dd>
-<dt><code>typeName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Fully qualified type name, e.g. <code>System.IO.File</code>.</dd>
-<dt><code>methodName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Method name, e.g. <code>ReadAllText</code>.</dd>
-<dt><code>format</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
-<dd><code>csharp</code> (default) for decompiled C#, or <code>il</code> for the normalized IL
-disassembly — the same form <code>list_changed_types</code> and <code>compare_type</code> use to
-decide body equality.</dd>
-<dt><code>parameterCount</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
-<dd>Number of parameters, to disambiguate overloads.</dd>
-<dt><code>parameterTypes</code> <span class="badge badge-optional">optional</span> <code>string[]</code></dt>
-<dd>Ordered parameter-type patterns for same-arity overloads, loose-matched like
-<code>find_methods</code>.</dd>
+<dt><code>type_name</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Fully qualified type name, to list that type's member changes.</dd>
+<dt><code>member_name</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>A method or accessor of that type, to show its two bodies. Needs
+<code>type_name</code>.</dd>
+<dt><code>parameter_count</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
+<dd>Number of parameters, to select one overload. Needs <code>member_name</code>.</dd>
+<dt><code>parameter_types</code> <span class="badge badge-optional">optional</span> <code>string[]</code></dt>
+<dd>Parameter-type patterns that select one overload. Needs <code>member_name</code>.</dd>
+<dt><code>namespace</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
+<dd>Exact namespace to restrict the changed-types list to; applies only without
+<code>type_name</code>.</dd>
+<dt><code>include_compiler_generated</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
+<dd>List the generated types and members under their own names as well, compared as they stand;
+applies only without <code>member_name</code>. Default <code>false</code>.</dd>
+<dt><code>format</code> <span class="badge badge-optional">optional</span> <code>csharp | il</code></dt>
+<dd>How to print the two bodies: <code>csharp</code> (the default) decompiles them,
+<code>il</code> disassembles them as the comparison reads them. Applies only with
+<code>member_name</code>.</dd>
+<dt><code>limit</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
+<dd>Maximum number of changes to list. Default 100.</dd>
 </dl>
 <h4>Returns</h4>
-<p>Both bodies, each labeled with the assembly it came from — or one copy plus a note when they
-are identical.</p>
+<p>Every line starts with <code>+</code> for what only B has, <code>-</code> for what only A
+has, and <code>~</code> for what both have but changed. Without <code>type_name</code>:</p>
+<pre><code>7 changed types:
+~ BaseShift.BaseArgumentMover [metadata,bodies]
+~ BaseShift.BaseArityMover [metadata,bodies]
+~ BaseShift.Gauge [bodies]
+~ BaseShift.Generated.ChangedInside [bodies]
+~ BaseShift.Generated.Renumbered [members]
+~ BaseShift.InterfaceArgumentMover [metadata]
+~ BaseShift.InterfaceArityMover [metadata]</code></pre>
+<p>A changed type names what changed: <code>metadata</code> (its base type, interfaces,
+modifiers, accessibility or kind), <code>members</code> (a member added or removed), and
+<code>bodies</code> (a method or accessor body changed). With <code>type_name</code>, one line
+per changed member, as its declaration; a changed property or event names the accessors whose
+bodies changed, which are what <code>member_name</code> takes next:</p>
+<pre><code>3 member changes in BaseShift.Gauge:
+~ public event EventHandler Changed [add_Changed]
+~ public int Level { get; set; } [get_Level]
+~ public int Limit { get; set; } [set_Limit]</code></pre>
+<p>A type only one assembly has lists all its members, and the header says
+<code>, which only A has</code> or <code>, which only B has</code>. With
+<code>member_name</code>, the two bodies under <code>// === A: path ===</code> and
+<code>// === B: path ===</code>. Bodies that print alike, in either format, get the verdict line
+alone and no code, since a copy would show nothing that changed; <code>decompile</code> returns
+the code:</p>
+<pre><code>// BaseShift.Generated.Renumbered.LocalFunctionCapturing(int) → int — bodies are identical in both assemblies.</code></pre>
+<p>When the C# reads alike while the IL differs, the line ends <code>— bodies decompile alike in
+both assemblies, but their IL differs; format il shows where.</code> A method only one assembly
+has is the whole difference, so its code comes alone, under a header saying which build has
+it:</p>
+<pre><code>// BaseShift.Generated.Renumbered.Inserted(int) → long — only B has it.</code></pre>
+<p>No change: <code>No changed types</code>, <code>No member changes in ...</code>.</p>
+<p>Members are matched by name, generic arity, parameter types and passing keywords, and return
+type, so a changed signature shows as one removal and one addition. A member's accessibility,
+modifiers and attributes are not compared. Bodies are compared as IL with tokens resolved to
+names and file positions left out, so a method a rebuild leaves unchanged does not show as
+changed. The code the compiler generates for a method, such as its lambdas, local functions,
+iterator and async state machines, and the copy of its code Burst compiles, is compared as part
+of that method, with the numbers the compiler gives generated names by position set aside: a
+method added before others does not make them show as changed, and a change inside a lambda
+shows on the method that contains it. For a method Burst compiles, the C# shown is Burst's copy
+of its code, and the header names it: <code>(via X$BurstManaged)</code>.</p>
 <h4>Errors</h4>
 <ul class="tight">
-<li><code>format</code> is neither <code>csharp</code> nor <code>il</code>.</li>
-<li>The type or method is missing from either assembly.</li>
-<li>Overload resolution fails or stays ambiguous in either assembly.</li>
+<li>A parameter used at a level it does not apply to: <code>member_name</code> without
+<code>type_name</code>, an overload hint without <code>member_name</code>,
+<code>namespace</code> with <code>type_name</code>, <code>include_compiler_generated</code>
+with <code>member_name</code>, and <code>format</code> without <code>member_name</code>.</li>
+<li><code>namespace</code> names a namespace neither assembly has:
+<code>Namespace not found in either assembly: ...</code></li>
+<li>The type is in neither assembly: <code>Type '...' not found in either assembly.</code>, or,
+when one of them references it, <code>Type '...' is not defined in either assembly; it comes from
+...</code></li>
+<li><code>member_name</code> names a property, event or field, which has no body of its own; the
+message names the accessors to compare instead, or for a field the constructors that hold its
+initializer.</li>
+<li>Neither assembly has a method of that name, or overload resolution fails, by the same rules
+as <code>decompile</code>.</li>
 </ul>
 <h4>See also</h4>
-<p><code>compare_type</code> for the whole type; <code>list_changed_types</code> to find which
-types moved at all.</p>
-</div>
-
-<div class="tool">
-<h3><code>compare_type</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Compare one type across two assemblies: added and removed members, plus a body-changed flag
-per method. No C# decompilation is invoked — body equality uses normalized IL.</p>
-<h4>Parameters</h4>
-<dl class="params">
-<dt><code>assemblyA</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Path to the first assembly (must be under an allowed root).</dd>
-<dt><code>assemblyB</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Path to the second assembly (must be under an allowed root).</dd>
-<dt><code>typeName</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Fully qualified type name, e.g. <code>System.String</code>.</dd>
-</dl>
-<h4>Returns</h4>
-<p>A header stating whether the type is present in both, only in A, or only in B, then one line
-per change: <code>+</code> for an added member, <code>-</code> for a removed one, and
-<code>~</code> for a method body that changed while keeping its signature. A type with no
-differences reports <code>... is identical in both assemblies.</code></p>
-<h4>Errors</h4>
-<p class="muted">Only the shared path and budget errors — a type absent from both assemblies is
-reported, not thrown.</p>
-<h4>See also</h4>
-<p><code>compare_method</code> for a changed body; <code>list_changed_types</code> for the
-assembly-wide sweep.</p>
-</div>
-
-<div class="tool">
-<h3><code>list_changed_types</code> <span class="badge badge-readonly">read-only</span></h3>
-<p>Enumerate the types that differ between two assemblies — added, removed, or changed in
-metadata, members, or method bodies. A pure metadata and IL walk; the C# decompiler is never
-invoked.</p>
-<h4>Parameters</h4>
-<dl class="params">
-<dt><code>assemblyA</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Path to the first assembly (must be under an allowed root).</dd>
-<dt><code>assemblyB</code> <span class="badge badge-required">required</span> <code>string</code></dt>
-<dd>Path to the second assembly (must be under an allowed root).</dd>
-<dt><code>namespaceFilter</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
-<dd>Restrict the sweep to one namespace, e.g. <code>System.IO</code>. Omit to scan the whole
-module.</dd>
-<dt><code>excludeCompilerGenerated</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
-<dd>Drop compiler-emitted types. Default <code>true</code>.</dd>
-</dl>
-<h4>Returns</h4>
-<p>A count line followed by one line per type, prefixed <code>Added:</code>,
-<code>Removed:</code>, or <code>Changed [...]:</code> with the change kinds named. When nothing
-differs: <code>No type changes detected.</code></p>
-<p>Members are matched by name plus parameter and return types, so any signature change surfaces
-as a remove plus an add. Body equality is decided from IL disassembly with operand tokens
-resolved to symbolic names, so a body whose source did not change compares equal across rebuilds
-even when the metadata tokens around it shift.</p>
-<h4>Errors</h4>
-<p class="muted">Only the shared path and budget errors.</p>
-<h4>See also</h4>
-<p><code>compare_type</code> to drill into one result; <code>find_harmony_dependencies</code>
-when the question is whether patches still bind.</p>
+<p><code>find_harmony_dependencies</code> for the members a mod depends on;
+<code>decompile</code> to read a changed type in full.</p>
 </div>
 
 <h2 id="troubleshooting">Troubleshooting</h2>
 
 <p>Every tool error reaches the caller as
 <code>Error: &lt;ExceptionType&gt;: &lt;message&gt;</code>. The messages below are shared by
-every assembly-loading tool.</p>
+several tools; the ones particular to a tool are listed under that tool.</p>
 
 <h4><code>No allowed roots configured. The server cannot load any assemblies.</code></h4>
 <p>The server was launched without <code>--allow-root</code>. Add one or more
 <code>--allow-root &lt;directory&gt;</code> arguments to the <code>args</code> array in
 <code>.mcp.json</code> and start a new session. <code>list_allowed_roots</code> reports the same
-condition without throwing.</p>
+condition without failing.</p>
 
 <h4><code>Path is not under any allowed root: ...</code></h4>
 <p>The requested assembly lives outside every configured root. The message lists the roots that
@@ -918,54 +1126,107 @@ another <code>--allow-root</code>.</p>
 <h4><code>Path resolves (via a symbolic link or junction) to a location outside any allowed root: ...</code></h4>
 <p>The path passed the lexical containment check but resolves to a real target outside the
 roots. This is the reparse-point check doing its job — a link planted inside a root cannot be
-used to reach outside it.</p>
+used to reach outside it. A chain of links that does not end, or cannot be followed, is rejected
+with <code>Path has too many levels of symbolic links or junctions</code> or <code>Path could not
+be resolved through its symbolic links or junctions</code>.</p>
 
 <h4><code>Path contains '..' which is not allowed: ...</code></h4>
 <p>Parent-directory segments are rejected before normalization. Pass an absolute path with no
 <code>..</code> components.</p>
 
-<h4><code>Assembly file does not exist: ...</code></h4>
-<p>The path is inside a root but names no file. Check the spelling and that the build actually
-produced the assembly.</p>
+<h4><code>Assembly file does not exist: ...</code> or <code>Assembly path is empty.</code></h4>
+<p>The path is inside a root but names no file, or no path was given. Check the spelling and that
+the build actually produced the assembly.</p>
 
 <h4><code>Assembly is N MB, which exceeds the M MB total memory budget on its own: ...</code></h4>
-<p>A single assembly larger than the whole budget can never fit, even with an empty cache. Raise
-the budget with <code>--max-total-size &lt;MB&gt;</code>.</p>
-
-<h4><code>Type not found: ...</code></h4>
-<p>The fully qualified name did not resolve. Nested types use <code>+</code> as the separator,
-though a dotted form is tried as a fallback. Use <code>search_types</code> to find the exact
-name.</p>
-
-<h4><code>Method '...' not found on ..., its base types, or as an extension method.</code></h4>
-<p>The name does not exist anywhere on the inheritance chain. <code>find_methods</code> with
-<code>declaringType</code> lists what the type actually has.</p>
-
-<h4><code>No overload of '...' matches ...</code></h4>
-<p>A <code>parameterCount</code> or <code>parameterTypes</code> hint was given and nothing
-satisfies it. The message lists every same-named overload found across the chain, so the right
-hint is usually visible in the error itself.</p>
-
-<h4><code>Member '...' is ambiguous — it exists as more than one member kind ...</code></h4>
-<p>The name is used by more than one kind of member on the type — obfuscated or non-C# metadata.
-Use a kind-specific tool (<code>decompile_property</code>, <code>decompile_event</code>) or pass
-an overload hint if the method is meant. An ordinary C# event does <em>not</em> trigger this: its
-compiler-generated backing field is recognized as part of the event.</p>
+<p>ILens holds an assembly's whole image in memory while it is open, so a file larger than the
+whole memory budget is refused before it is loaded. Raise the budget with
+<code>--max-total-size &lt;MB&gt;</code>.</p>
 
 <h4><code>Unknown argument '...' for tool '...'. Valid arguments: ...</code></h4>
-<p>An argument name the tool does not declare. Most ILens filters are optional, so a silently
-dropped filter would return an unfiltered result that looks like an answer — the call is rejected
-instead. The message lists the valid names.</p>
+<p>An argument name the tool does not declare, often a parameter name from an older ILens
+release. Most filters are optional, so a silently dropped filter would return an unfiltered
+result that looks like an answer — the call is rejected instead. The message lists the valid
+names.</p>
+
+<h4><code>The JSON value could not be converted to ILens.AnalysisKind. ...</code></h4>
+<p>A value outside the parameter's set of values: here a <code>kind</code> that
+<code>analyze</code> does not have, and likewise <code>ILens.MemberKind</code> for
+<code>kinds</code>, <code>ILens.AccessibilityFilter</code> for <code>accessibility</code>, and
+<code>ILens.CompareFormat</code> for <code>format</code>. The tool's schema lists the valid values,
+and the tool reference above lists them by parameter.</p>
+
+<h4><code>Type not found: ...</code></h4>
+<p>No type the assembly defines or references has that name. When types of that name exist in
+another arity, the message lists them. <code>find_types</code> with <code>name_contains</code>
+finds the exact name.</p>
+
+<h4><code>... is not defined in this assembly; it comes from ...</code></h4>
+<p>The assembly uses the type but another assembly defines it. Point the call at that assembly to
+read the type itself; <code>analyze</code> can still answer who in this assembly uses it.</p>
+
+<h4><code>Type name '...' matches N types: ... Name one as listed.</code></h4>
+<p>A name written without arity matches several generic types, such as
+<code>System.Func</code>. Pass one of the listed names, which carry their arity.</p>
+
+<h4><code>Namespace not found: ...</code></h4>
+<p>No type of the assembly lies in that namespace or below it. Namespaces are matched exactly and
+case-sensitively.</p>
+
+<h4><code>Member '...' not found on ..., its base types, or as an extension method.</code></h4>
+<p>The name does not exist anywhere on the inheritance chain. <code>list_members</code> lists
+what the type actually has; an accessor is named with its prefix, <code>get_Count</code>, and a
+constructor <code>.ctor</code>. When the search stopped at a base class whose assembly ILens
+could not load, the message says <code>the base types ILens could load</code> and ends with
+<code>... and its base types were not searched, since ILens could not load ...</code>. Put that
+assembly beside the inspected one or at the top of an allow-root, and the search goes on into
+it.</p>
+
+<h4><code>... inherits ... from a base class this assembly does not define; ... comes from ...</code></h4>
+<p>The member is declared on a base class another assembly defines, so the inspected assembly
+holds no code for it. The message names the file that does: call <code>decompile</code>,
+<code>analyze</code> or <code>compare</code> on that file to read the member.</p>
+
+<h4><code>'...' on ... has N matching overloads; specify parameter_count or parameter_types to disambiguate: ...</code></h4>
+<p>The name is overloaded. Pass <code>parameter_types</code> (or <code>parameter_count</code>
+when the arities differ) taken from the listed candidates.</p>
+
+<h4><code>No overload of '...' on ... matches ...</code></h4>
+<p>A <code>parameter_count</code> or <code>parameter_types</code> hint was given and nothing
+satisfies it. The message lists every same-named overload found across the inheritance chain, so
+the right hint is usually visible in the error itself — and a confirmed "no such overload" is
+often the answer that was being sought.</p>
+
+<h4><code>Member '...' on ... is ambiguous — it exists as more than one member kind ...</code></h4>
+<p>The name is used by more than one kind of member on the type, which happens only in
+obfuscated or non-C# metadata. Pass an overload hint if the method is meant. An ordinary C# event
+does <em>not</em> trigger this: its compiler-generated backing field is recognized as part of the
+event.</p>
 
 <h4><code>Analysis kind '...' is not valid for ...</code></h4>
 <p>The <code>kind</code> does not apply to what <code>analyze</code> resolved the symbol to. The
 message lists the kinds that do apply to that category.</p>
 
+<h4><code>parameter_count (N) contradicts parameter_types.Length (M).</code></h4>
+<p>Both overload hints were given and disagree on the number of parameters. Pass one of them, or
+make them agree.</p>
+
+<h4>Decompiled code shows numbers where names belong, or <code>Unknown result type</code> comments</h4>
+<p>A referenced assembly is not in an allowed folder. ILens finds an assembly's references beside
+it, at the top of each allow-root, and in the installed .NET; a reference it cannot find leaves
+the decompiler without its types, so enum values come out as numbers and expressions of those
+types are marked as unknown. Add the folder that holds the missing assemblies, such as a game's
+own assemblies for a mod, as another <code>--allow-root</code>.</p>
+
 <h4>The tools do not appear at all</h4>
 <p>Almost always the two gates described under
 <a href="#integrate">Integrating with Claude Code</a>: an already-running Claude app holding a
 stale PATH, or a session that started before <code>.mcp.json</code> existed. Close Claude app
-entirely, relaunch it, and start a new session.</p>
+entirely, relaunch it, and start a new session. The server also refuses to start when its own
+arguments are wrong — an <code>--allow-root</code> directory that does not exist, an unknown
+flag, or a non-numeric <code>--max-total-size</code>. It then writes the reason to stderr as a
+line starting with <code>[ILens]</code> and exits, which the MCP client typically reports as a
+server that failed to connect.</p>
 
 <h2 id="appendix-alt-install">Appendix A: Alternative installers</h2>
 
@@ -1051,13 +1312,14 @@ equivalent to the Claude Code one:</p>
   }
 }</code></pre>
 
-<p>Claude Desktop has no per-project <code>CLAUDE.md</code>, so paste the snippet from
+<p>Claude Desktop's chat does not read server instructions and has no per-project
+<code>CLAUDE.md</code>, so paste the paragraph from
 <a href="#project-guidance">Project-level guidance</a> into your Claude Desktop Project's custom
-instructions instead.</p>
+instructions.</p>
 
 <h2 id="colophon">Version, source, license</h2>
 
-<p>This guide documents <strong>ILens 9</strong>. Source and issue tracker:
+<p>This guide documents <strong>ILens 10</strong>. Source and issue tracker:
 <a href="https://github.com/tadis174/ILens">github.com/tadis174/ILens</a>.</p>
 
 <p>ILens is released under the MIT License; the full text ships as <code>LICENSE</code> beside

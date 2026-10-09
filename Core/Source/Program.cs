@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using ILens;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -101,6 +103,9 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
 
+var jsonOptions = new JsonSerializerOptions(McpJsonUtilities.DefaultOptions);
+jsonOptions.Converters.Insert(0, new JsonStringEnumConverter(SchemaNames.Policy));
+
 builder.Services.AddSingleton(guard);
 builder.Services.AddSingleton(registry);
 builder.Services
@@ -111,6 +116,7 @@ builder.Services
             Name = "ILens",
             Version = ilensVersion
         };
+        options.ServerInstructions = ServerInstructions.For(guard.AllowedRoots);
         // Order matters: the SDK wraps its filter pipeline back-to-front, so the
         // first-registered filter is the outermost. ToolErrorFilter must stay first
         // to catch and format what the others throw, and argument names must be
@@ -120,7 +126,7 @@ builder.Services
         ArrayCoercionFilter.Install(options);
     })
     .WithStdioServerTransport()
-    .WithToolsFromAssembly();
+    .WithToolsFromAssembly(serializerOptions: jsonOptions);
 
 await builder.Build().RunAsync();
 return 0;

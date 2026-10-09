@@ -8,137 +8,170 @@ namespace ILens.Tools;
 [McpServerToolType]
 public static class ListMembersTool
 {
-    private const int DefaultLimit = 100;
-
     [McpServerTool(Name = "list_members", ReadOnly = true),
-     Description("List members of a type, grouped by kind (Methods/Properties/Fields/Events). " +
-        "Returns one signature per line — no method bodies, no documentation strings. " +
-        "Filter by member kind, accessibility, and case-insensitive name pattern. " +
-        "Cheaper than summarize_type when you only need part of the API surface.")]
+     Description("List a type's members, grouped by kind, one declaration per line without bodies. " +
+        "The header gives the type's declaration and base types. A constructor is listed under the " +
+        "type's name among the methods, a member inherited from a base type is marked [from Base], " +
+        "and an obsolete one [Obsolete].")]
     public static string ListMembers(
         AssemblyHostRegistry registry,
-        [Description("Path to the .NET assembly to inspect (must be under an allowed root).")] string assembly,
-        [Description("Fully qualified type name, e.g. 'System.String' or 'System.IO.File'.")] string typeName,
-        [Description("Member kinds to include. Omit to include all four (Method, Property, Field, Event).")] MemberKind[] kinds = null,
-        [Description("Accessibility filter. Default: PublicProtected.")] AccessibilityFilter accessibility = AccessibilityFilter.PublicProtected,
-        [Description("Optional case-insensitive substring filter on member name.")] string namePattern = null,
-        [Description("Include members declared on base types (stops at System.Object). Default: false.")] bool includeInherited = false,
-        [Description("Cap on total result lines across all kinds. Default: 100.")] int? limit = null)
+        [Description(ParameterDescriptions.Assembly)] string assembly,
+        [Description(ParameterDescriptions.TypeName)] string type_name,
+        [Description("Kinds of member to list, all when omitted.")] MemberKind[] kinds = null,
+        [Description(ParameterDescriptions.Accessibility)] AccessibilityFilter accessibility = AccessibilityFilter.PublicProtected,
+        [Description(ParameterDescriptions.NameContains)] string name_contains = null,
+        [Description("Include members declared on base types (stops at System.Object).")] bool include_inherited = false,
+        [Description(ParameterDescriptions.IncludeCompilerGenerated)] bool include_compiler_generated = false,
+        [Description(ParameterDescriptions.Limit)] int limit = ListOutput.DefaultLimit)
     {
-        var resolver = registry.GetOrLoad(assembly).Resolver;
-        var type = resolver.ResolveType(typeName);
+        using var lease = registry.GetOrLoad(assembly);
+        var type = lease.Host.Resolver.ResolveType(type_name);
 
-        var kindSet = NormalizeKinds(kinds);
-        var typesToScan = TypesToScan(type, includeInherited);
-        var empty = new List<(IMember Member, string Origin)>();
-
-        // Collect once per kind so per-section counts are accurate before truncation.
-        // IEnumerable<T> is covariant, so the lambdas return IEnumerable<IMember> implicitly.
-        var methods    = kindSet.Contains(MemberKind.Method)
-            ? Collect(typesToScan, t => t.Methods.Where(m => !m.IsConstructor && !m.IsAccessor),
-                accessibility, namePattern, type) : empty;
-        var properties = kindSet.Contains(MemberKind.Property)
-            ? Collect(typesToScan, t => t.Properties, accessibility, namePattern, type) : empty;
-        var fields     = kindSet.Contains(MemberKind.Field)
-            ? Collect(typesToScan, t => t.Fields, accessibility, namePattern, type) : empty;
-        var events     = kindSet.Contains(MemberKind.Event)
-            ? Collect(typesToScan, t => t.Events, accessibility, namePattern, type) : empty;
-
-        var totalAvailable = methods.Count + properties.Count + fields.Count + events.Count;
-        if (totalAvailable == 0)
-            return $"No members on {type.FullName} match the filter";
-
-        var cap = limit ?? DefaultLimit;
-        var sb = new StringBuilder();
-        sb.Append(type.FullName);
-        if (includeInherited) sb.Append(" (with inherited)");
-        sb.Append(":\n");
-
-        var emitted = 0;
-        emitted += AppendSection(sb, "Methods",    methods,    cap, emitted);
-        emitted += AppendSection(sb, "Properties", properties, cap, emitted);
-        emitted += AppendSection(sb, "Fields",     fields,     cap, emitted);
-        emitted += AppendSection(sb, "Events",     events,     cap, emitted);
-
-        if (emitted < totalAvailable)
-            sb.Append($"\n... (truncated, {totalAvailable - emitted} more members; raise limit to see all)");
-
-        return sb.ToString().TrimEnd();
-    }
-
-    private static HashSet<MemberKind> NormalizeKinds(MemberKind[] kinds)
-    {
-        if (kinds is null || kinds.Length == 0)
-            return new HashSet<MemberKind>
-                { MemberKind.Method, MemberKind.Property, MemberKind.Field, MemberKind.Event };
-        return new HashSet<MemberKind>(kinds);
-    }
-
-    private static List<ITypeDefinition> TypesToScan(ITypeDefinition type, bool includeInherited)
-    {
-        var list = new List<ITypeDefinition> { type };
-        if (includeInherited)
-            list.AddRange(TypeWalker.WalkBaseTypes(type));
-        return list;
-    }
-
-    private static List<(IMember Member, string Origin)> Collect(
-        List<ITypeDefinition> typesToScan,
-        Func<ITypeDefinition, IEnumerable<IMember>> selector,
-        AccessibilityFilter accessibility,
-        string namePattern,
-        ITypeDefinition declaredOn)
-    {
-        // Walk derived → base. Dedup by member identity so an override hides the base.
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var results = new List<(IMember, string)>();
-
-        foreach (var t in typesToScan)
+        var kindSet = kinds is { Length: > 0 } ? kinds.ToHashSet() : Enum.GetValues<MemberKind>().ToHashSet();
+        var typesToScan = new List<IType> { type };
+        UnreadBase unread = null;
+        if (include_inherited)
         {
-            var origin = ReferenceEquals(t, declaredOn) ? "" : $"  [from {t.FullName}]";
+            // The base classes another assembly defines come from the assembly's references,
+            // since ILens's own type system holds none of them.
+            typesToScan.AddRange(TypeWalker.WalkConstructedBaseTypes(type));
+            var external = lease.Host.ReadExternalBases(type);
+            typesToScan.AddRange(external.Levels);
+            unread = external.Unread;
+        }
+        bool Passes(IEntity entity) =>
+            accessibility.Permits(entity.Accessibility)
+            && (string.IsNullOrEmpty(name_contains)
+                || entity.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase));
+
+        // The type's own constructors only: C# does not inherit them.
+        var groups = new List<(Noun Noun, List<string> Lines)>();
+        if (kindSet.Contains(MemberKind.Method))
+            groups.Add((Noun.Regular("method"), Collect(typesToScan, type,
+                t => t.Methods.Where(m => !m.IsAccessor && (!m.IsConstructor || t.Equals(type))),
+                Passes, include_compiler_generated)));
+        if (kindSet.Contains(MemberKind.Property))
+            groups.Add((new Noun("property", "properties"), Collect(typesToScan, type, t => t.Properties,
+                Passes, include_compiler_generated)));
+        if (kindSet.Contains(MemberKind.Field))
+            groups.Add((Noun.Regular("field"), Collect(typesToScan, type, t => t.Fields,
+                Passes, include_compiler_generated)));
+        if (kindSet.Contains(MemberKind.Event))
+            groups.Add((Noun.Regular("event"), Collect(typesToScan, type, t => t.Events,
+                Passes, include_compiler_generated)));
+        if (kindSet.Contains(MemberKind.NestedType))
+            groups.Add((new Noun("nested type", "nested types"), CollectNestedTypes(typesToScan, type,
+                Passes, include_compiler_generated)));
+
+        var subject = "of " + SignatureFormatter.FormatTypeDeclaration(type);
+        var total = groups.Sum(group => group.Lines.Count);
+        var sb = new StringBuilder(ListOutput.Header(total, new Noun("member", "members"), subject));
+
+        // The limit counts entries across the groups; a group it cuts keeps its full count, and
+        // a group after the cut is left out.
+        var shown = 0;
+        foreach (var (noun, lines) in groups.Where(group => group.Lines.Count > 0))
+        {
+            if (shown >= limit)
+                break;
+            sb.Append('\n').Append(noun.Count(lines.Count)).Append(':');
+            foreach (var line in lines.Take(limit - shown))
+                sb.Append("\n  ").Append(line);
+            shown += Math.Min(lines.Count, limit - shown);
+        }
+        if (shown < total)
+            sb.Append('\n').Append(ListOutput.Truncation(total - shown));
+        if (unread != null)
+            sb.Append('\n').Append(
+                $"Not shown: what {unread.TypeName} and its base types declare; ILens could not load {unread.Assembly}");
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The declaration lines of the members <paramref name="selector"/> picks, sorted by name
+    /// with the constructors first, since they are declared under the type's name rather than
+    /// their own.
+    /// </summary>
+    private static List<string> Collect(
+        List<IType> typesToScan,
+        ITypeDefinition declaredOn,
+        Func<ITypeDefinition, IEnumerable<IMember>> selector,
+        Func<IEntity, bool> passes,
+        bool include_compiler_generated)
+    {
+        // Walk derived → base. Dedup by signature so an override hides the base declaration.
+        // A base member prints as its type declares it but is keyed as declaredOn sees it: a
+        // generic base declares in its type parameters what an override takes as the type
+        // arguments the chain gives them.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var members = new List<(IMember Member, string Line)>();
+
+        foreach (var scanned in typesToScan)
+        {
+            var t = scanned.GetDefinition()!;
+            var substitution = scanned.GetSubstitution();
+            var origin = t.Equals(declaredOn) ? "" : $"  [from {ReferenceFormatter.FormatTypeName(t)}]";
             foreach (var member in selector(t))
             {
-                if (!accessibility.Permits(member.Accessibility)) continue;
-                if (!PassesNamePattern(member.Name, namePattern)) continue;
-
-                var key = MemberKey(member);
-                if (!seen.Add(key)) continue;
-                results.Add((member, origin));
+                if (!passes(member))
+                    continue;
+                if (!include_compiler_generated && CompilerGeneratedFilter.IsCompilerGenerated(member))
+                    continue;
+                if (!seen.Add(MemberKey(member.Specialize(substitution))))
+                    continue;
+                members.Add((member, ObsoleteMark(member) + SignatureFormatter.FormatMember(member) + origin));
             }
         }
 
-        return results;
+        return members
+            .OrderBy(entry => entry.Member is IMethod { IsConstructor: true } ? 0 : 1)
+            .ThenBy(entry => entry.Member.Name, StringComparer.Ordinal)
+            .ThenBy(entry => entry.Line, StringComparer.Ordinal)
+            .Select(entry => entry.Line)
+            .ToList();
     }
+
+    /// <summary>
+    /// The nested types, one per line by the name the other tools take, sorted by that name.
+    /// </summary>
+    private static List<string> CollectNestedTypes(
+        List<IType> typesToScan,
+        ITypeDefinition declaredOn,
+        Func<IEntity, bool> passes,
+        bool include_compiler_generated)
+    {
+        var nestedTypes = new List<(string Name, string Line)>();
+        foreach (var scanned in typesToScan)
+        {
+            var t = scanned.GetDefinition()!;
+            var origin = t.Equals(declaredOn) ? "" : $"  [from {ReferenceFormatter.FormatTypeName(t)}]";
+            foreach (var nested in t.NestedTypes)
+            {
+                if (!passes(nested))
+                    continue;
+                if (!include_compiler_generated && CompilerGeneratedFilter.IsCompilerGenerated(nested))
+                    continue;
+                var name = ReferenceFormatter.FormatTypeName(nested);
+                nestedTypes.Add((name, ObsoleteMark(nested) + name + origin));
+            }
+        }
+        return nestedTypes
+            .OrderBy(entry => entry.Name, StringComparer.Ordinal)
+            .Select(entry => entry.Line)
+            .ToList();
+    }
+
+    private static string ObsoleteMark(IEntity entity) =>
+        entity.GetAttributes().Any(attribute => attribute.AttributeType.ReflectionName == "System.ObsoleteAttribute")
+            ? "[Obsolete] "
+            : "";
 
     private static string MemberKey(IMember member) => member switch
     {
-        // Distinguish overloads on the same kind by parameter types.
-        IMethod m => $"{member.SymbolKind}:{m.Name}({string.Join(",", m.Parameters.Select(p => p.Type.ReflectionName))})",
+        // Distinguish overloads on the same kind by parameter types: a method's, and an
+        // indexer's, since every indexer of a type shares one name.
+        IParameterizedMember m => $"{member.SymbolKind}:{m.Name}({string.Join(",", m.Parameters.Select(p => p.Type.ReflectionName))})",
         _ => $"{member.SymbolKind}:{member.Name}",
     };
-
-    private static bool PassesNamePattern(string name, string pattern) =>
-        string.IsNullOrEmpty(pattern)
-            || name.Contains(pattern, StringComparison.OrdinalIgnoreCase);
-
-    private static int AppendSection(StringBuilder sb, string label,
-        List<(IMember Member, string Origin)> members, int cap, int alreadyEmitted)
-    {
-        if (members.Count == 0) return 0;
-
-        var remaining = cap - alreadyEmitted;
-        if (remaining <= 0) return 0;
-
-        var emitting = Math.Min(members.Count, remaining);
-        sb.Append($"{label} ({members.Count}):\n");
-        for (int i = 0; i < emitting; i++)
-        {
-            var (member, origin) = members[i];
-            sb.Append("  ");
-            sb.Append(SignatureFormatter.FormatMember(member));
-            sb.Append(origin);
-            sb.Append('\n');
-        }
-        return emitting;
-    }
 }

@@ -4,8 +4,8 @@ using ICSharpCode.Decompiler.TypeSystem;
 namespace ILens;
 
 /// <summary>
-/// Renders members and parameters as one-line C#-style declaration signatures
-/// (no method bodies, no XML doc). Used by list_members and find_methods.
+/// Renders members, parameters and types as one-line C#-style declarations (no method
+/// bodies, no XML doc). Used by list_members and compare.
 /// </summary>
 public static class SignatureFormatter
 {
@@ -22,28 +22,96 @@ public static class SignatureFormatter
     };
 
     /// <summary>
-    /// Render a parameter as <c>[modifier ]Type name</c> — handles <c>ref</c>, <c>out</c>,
-    /// <c>in</c>, and <c>params</c>. Type rendering uses <see cref="ReferenceFormatter.FormatTypeRef"/>.
+    /// Render a parameter as <c>[modifier ]Type name</c>: <c>ref</c>, <c>out</c>, <c>in</c>
+    /// and <c>ref readonly</c> through <see cref="ReferenceFormatter.FormatParameterType"/>,
+    /// and <c>params</c>.
     /// </summary>
-    public static string FormatParameter(IParameter p)
+    public static string FormatParameter(IParameter p) =>
+        $"{(p.IsParams ? "params " : "")}{ReferenceFormatter.FormatParameterType(p)} {p.Name}";
+
+    /// <summary>
+    /// Render a type's declaration on one line: accessibility, modifiers, kind, its full name
+    /// with its type parameters, and the base types its metadata lists, such as
+    /// <c>public class System.Collections.Generic.List&lt;T&gt; : IList&lt;T&gt;, IList</c>. A
+    /// base every type of its kind has, such as <c>object</c> or <c>ValueType</c>, is left out,
+    /// and an enum names its underlying type only when that is not <c>int</c>.
+    /// </summary>
+    public static string FormatTypeDeclaration(ITypeDefinition type)
     {
-        var prefix = "";
-        if (p.ReferenceKind == ReferenceKind.Ref)  prefix = "ref ";
-        else if (p.ReferenceKind == ReferenceKind.Out) prefix = "out ";
-        else if (p.ReferenceKind == ReferenceKind.In)  prefix = "in ";
-        else if (p.IsParams) prefix = "params ";
-        return $"{prefix}{ReferenceFormatter.FormatTypeRef(p.Type)} {p.Name}";
+        var words = new List<string>();
+        var accessibility = FormatAccessibility(type.Accessibility);
+        if (accessibility.Length > 0)
+            words.Add(accessibility);
+        switch (type.Kind)
+        {
+            case TypeKind.Class:
+                if (type.IsStatic) words.Add("static");
+                else if (type.IsAbstract) words.Add("abstract");
+                else if (type.IsSealed) words.Add("sealed");
+                words.Add(type.IsRecord ? "record" : "class");
+                break;
+            case TypeKind.Struct:
+                if (type.IsReadOnly) words.Add("readonly");
+                if (type.IsByRefLike) words.Add("ref");
+                words.Add(type.IsRecord ? "record struct" : "struct");
+                break;
+            default:
+                words.Add(type.Kind.ToString().ToLowerInvariant());
+                break;
+        }
+        words.Add(FormatDeclaredName(type));
+        var declaration = string.Join(" ", words);
+
+        var bases = type.Kind == TypeKind.Enum
+            ? (type.EnumUnderlyingType is { } underlying && !underlying.IsKnownType(KnownTypeCode.Int32)
+                ? [ReferenceFormatter.FormatTypeRef(underlying)]
+                : new List<string>())
+            : type.DirectBaseTypes
+                .Where(b => b.ReflectionName is not ("System.Object" or "System.ValueType" or "System.Enum"
+                    or "System.MulticastDelegate" or "System.Delegate"))
+                .Select(ReferenceFormatter.FormatTypeRef)
+                .ToList();
+        return bases.Count == 0 ? declaration : $"{declaration} : {string.Join(", ", bases)}";
+    }
+
+    /// <summary>
+    /// A type's full name as its declaration writes it: its namespace, the types enclosing it,
+    /// and each one's own type parameters by name, such as
+    /// <c>System.Collections.Generic.Dictionary&lt;TKey, TValue&gt;.Enumerator</c>.
+    /// </summary>
+    private static string FormatDeclaredName(ITypeDefinition type)
+    {
+        var segments = new List<string>();
+        for (var t = type; t != null; t = t.DeclaringTypeDefinition)
+        {
+            var own = t.TypeParameters.Skip(t.DeclaringTypeDefinition?.TypeParameterCount ?? 0)
+                .Select(p => p.Name)
+                .ToList();
+            segments.Add(own.Count == 0 ? t.Name : $"{t.Name}<{string.Join(", ", own)}>");
+        }
+        segments.Reverse();
+        var name = string.Join(".", segments);
+        return string.IsNullOrEmpty(type.Namespace) ? name : $"{type.Namespace}.{name}";
     }
 
     private static string FormatMethodSignature(IMethod method)
     {
         var acc = FormatAccessibility(method.Accessibility);
+        var parameters = string.Join(", ", method.Parameters.Select(FormatParameter));
+
+        // C# declares a constructor under its type's name and without a return type, and a
+        // static one without accessibility.
+        if (method.IsConstructor)
+        {
+            var typeName = method.DeclaringTypeDefinition?.Name ?? method.Name;
+            return method.IsStatic ? $"static {typeName}()" : $"{acc} {typeName}({parameters})";
+        }
+
         var modifiers = FormatMethodModifiers(method);
-        var ret = ReferenceFormatter.FormatTypeRef(method.ReturnType);
+        var ret = ReferenceFormatter.FormatReturnType(method);
         var typeParams = method.TypeParameters.Count > 0
             ? "<" + string.Join(", ", method.TypeParameters.Select(p => p.Name)) + ">"
             : "";
-        var parameters = string.Join(", ", method.Parameters.Select(FormatParameter));
         return $"{acc}{modifiers} {ret} {method.Name}{typeParams}({parameters})";
     }
 
@@ -52,15 +120,23 @@ public static class SignatureFormatter
         var acc = FormatAccessibility(property.Accessibility);
         var modifiers = FormatMemberModifiers(property.IsStatic, property.IsAbstract,
             property.IsOverride, property.IsVirtual, property.IsSealed);
-        var ret = ReferenceFormatter.FormatTypeRef(property.ReturnType);
+        var ret = ReferenceFormatter.FormatReturnType(property);
+
+        // A property with parameters is an indexer in C#. It prints under its metadata name, Item
+        // unless [IndexerName] gives another, rather than C#'s 'this', because that name is what
+        // the other tools take, as in get_Item.
+        var name = property.Parameters.Count > 0
+            ? $"{property.Name}[{string.Join(", ", property.Parameters.Select(FormatParameter))}]"
+            : property.Name;
 
         var accessors = new StringBuilder();
         if (property.CanGet)
             AppendAccessor(accessors, "get", property.Getter, property.Accessibility);
         if (property.CanSet)
-            AppendAccessor(accessors, "set", property.Setter, property.Accessibility);
+            AppendAccessor(accessors, property.Setter.IsInitOnly ? "init" : "set", property.Setter,
+                property.Accessibility);
 
-        return $"{acc}{modifiers} {ret} {property.Name} {{ {accessors}}}";
+        return $"{acc}{modifiers} {ret} {name} {{ {accessors}}}";
     }
 
     /// <summary>
@@ -85,6 +161,7 @@ public static class SignatureFormatter
         else if (field.IsStatic) modifiers = " static";
         else if (field.IsReadOnly) modifiers = " readonly";
         else modifiers = "";
+        if (field.IsVolatile) modifiers += " volatile";
 
         var t = ReferenceFormatter.FormatTypeRef(field.Type);
         var line = $"{acc}{modifiers} {t} {field.Name}";

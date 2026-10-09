@@ -4,7 +4,7 @@ using System.Reflection.Metadata;
 namespace ILens;
 
 /// <summary>
-/// Decodes a type's custom attributes straight from metadata, tolerating the one
+/// Decodes a type's or method's custom attributes straight from metadata, tolerating the one
 /// failure that defeats ILSpy's high-level <c>IAttribute.FixedArguments</c>: a
 /// constructor argument whose enum type lives in a referenced assembly that the
 /// scanned module's type system can't resolve.
@@ -13,7 +13,7 @@ namespace ILens;
 /// whose <c>GetUnderlyingEnumType</c> throws <c>EnumUnderlyingTypeResolveException</c>
 /// for such an enum, and the catch discards the <em>entire</em> argument list —
 /// so <c>[HarmonyPatch(typeof(X), MethodType.Constructor, ...)]</c> decodes to
-/// nothing (see TASK-23). This reader uses its own provider whose
+/// nothing. This reader uses its own provider whose
 /// <c>GetUnderlyingEnumType</c> simply assumes <c>Int32</c> — correct for
 /// HarmonyLib's <c>MethodType</c> and effectively every attribute enum — so the
 /// decode succeeds. Everything it reads (TypeRefs, the value blob, the
@@ -34,17 +34,16 @@ public static class LenientAttributeReader
         string AttributeTypeName, IReadOnlyList<LenientArg> FixedArguments);
 
     /// <summary>
-    /// Decode every custom attribute on the given type. Attributes whose value
+    /// Decode every custom attribute of one type or method. Attributes whose value
     /// blob is malformed are skipped rather than aborting the whole list.
     /// </summary>
-    public static IReadOnlyList<DecodedAttribute> ReadTypeAttributes(
-        MetadataReader metadata, TypeDefinitionHandle typeHandle)
+    public static IReadOnlyList<DecodedAttribute> ReadAttributes(
+        MetadataReader metadata, CustomAttributeHandleCollection attributes)
     {
         var provider = new StringTypeProvider();
         var results = new List<DecodedAttribute>();
-        var typeDef = metadata.GetTypeDefinition(typeHandle);
 
-        foreach (var attrHandle in typeDef.GetCustomAttributes())
+        foreach (var attrHandle in attributes)
         {
             var attr = metadata.GetCustomAttribute(attrHandle);
             var attrTypeName = GetAttributeTypeName(metadata, attr.Constructor);

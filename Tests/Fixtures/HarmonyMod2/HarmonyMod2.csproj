@@ -4,9 +4,9 @@
     RVA-shifted twin of HarmonyMod. Compiles HarmonyMod/Patches.cs verbatim
     plus an extra Padding class declared earlier in source order, so methods
     on HarmonyMod.TargetA et al. produce byte-identical IL in HarmonyMod.dll
-    and HarmonyMod2.dll but land at different file RVAs. This is the
-    regression target for TASK-21 — AssemblyHost.DisassembleMethodBody
-    strips ILSpy's "// Method begins at RVA …" header so the two disassembly
+    and HarmonyMod2.dll but land at different file RVAs. The comparison
+    tests use the pair to check that AssemblyHost.DisassembleMethodBody
+    strips ILSpy's "// Method begins at RVA …" header, so the two disassembly
     strings compare equal despite the RVA shift.
   -->
 

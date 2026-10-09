@@ -5,7 +5,7 @@
     <AssemblyName>ILens</AssemblyName>
     <RootNamespace>ILens</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>10</Version>
+    <Version>11</Version>
     <!-- .NET appends the git commit SHA to AssemblyInformationalVersion by default,
          which makes the binary differ on every commit even when no source changed.
          Two things make that worthless here. The runtime strips the suffix before

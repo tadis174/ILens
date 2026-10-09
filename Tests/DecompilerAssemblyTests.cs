@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Reflection.Emit;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 
@@ -7,7 +6,8 @@ namespace Tests;
 
 /// <summary>
 /// End-to-end tests: spawn the real ILens MCP server and exercise its tools
-/// against ICSharpCode.Decompiler.dll. Assertions check the <em>shape</em> of
+/// against ICSharpCode.Decompiler.dll, and against the runtime's System.Private.CoreLib
+/// for type shapes ICSharpCode.Decompiler.dll does not show. Assertions check the <em>shape</em> of
 /// each response, not exact contents — the inspected assembly's API drifts
 /// across versions, but the tool contract (call in, useful text out) does not.
 /// </summary>
@@ -29,142 +29,201 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     }
 
     [Fact]
-    public async Task ListTypes_OnAPopulatedNamespace_ReturnsTypes()
+    public async Task FindTypes_InANamespace_ListsItsTypesButNotThoseOfItsSubNamespaces()
     {
-        string text = await CallToolText("list_types", new()
+        string text = await CallToolText("find_types", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["namespaceName"] = "ICSharpCode.Decompiler.TypeSystem",
+            ["namespace"] = "ICSharpCode.Decompiler.TypeSystem",
+            ["limit"] = 1000,
         });
-        Assert.DoesNotContain("No types in namespace", text);
-        Assert.Contains("ICSharpCode.Decompiler.TypeSystem.", text);
+
+        var lines = text.Split('\n');
+        Assert.Matches(@"^\d+ types:$", lines[0]);
+        Assert.All(lines.Skip(1), line => Assert.StartsWith("ICSharpCode.Decompiler.TypeSystem.", line));
+        Assert.DoesNotContain(lines, line => line.StartsWith("ICSharpCode.Decompiler.TypeSystem.Implementation."));
     }
 
     [Fact]
-    public async Task SearchTypes_BySubstring_FindsMatches()
+    public async Task FindTypes_WithANamespaceThatDoesNotExist_ReturnsError()
     {
-        string text = await CallToolText("search_types", new()
+        // An exact namespace asserts it exists; answering a misspelling with "No types"
+        // would read as an empty namespace.
+        var (result, text) = await CallToolExpectingError("find_types", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["pattern"] = "Decompiler",
+            ["namespace"] = "ICSharpCode.Decompiler.TypeSystm",
         });
-        Assert.DoesNotContain("No types match", text);
-        Assert.Contains("Decompiler", text);
+
+        Assert.True(result.IsError, $"Expected an error, got: {text}");
+        Assert.Contains("Namespace not found: ICSharpCode.Decompiler.TypeSystm.", text);
     }
 
     [Fact]
-    public async Task SearchTypes_DefaultsToHidingRoslynClosureClasses()
+    public async Task FindTypes_WithoutAFilter_ListsTypesUpToTheLimitAndCountsAll()
+    {
+        string text = await CallToolText("find_types", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+        });
+
+        var lines = text.Split('\n');
+        int total = ParseLeadingCount(text);
+        Assert.True(total > 100, $"Expected more types than the default limit, got: {lines[0]}");
+        Assert.Equal(102, lines.Length);
+        Assert.Equal($"... ({total - 100} more; raise limit to see all)", lines[^1]);
+        Assert.Equal(lines[1..^1].Order(StringComparer.Ordinal), lines[1..^1]);
+    }
+
+    [Fact]
+    public async Task FindTypes_ListsAnInternalTypeOnlyWithAccessibilityAll()
+    {
+        var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
+        var names = assembly.GetTypes().Select(t => t.Name).ToList();
+        var type = assembly.GetTypes()
+            .Where(t => t.IsNotPublic && !t.Name.Contains('<') && !t.Name.Contains('`'))
+            .OrderBy(t => t.FullName, StringComparer.Ordinal)
+            .FirstOrDefault(t => names.Count(n => n.Contains(t.Name, StringComparison.OrdinalIgnoreCase)) == 1)
+            ?? throw new InvalidOperationException(
+                "No internal top-level type with a distinctive name found in ICSharpCode.Decompiler.dll — " +
+                "the test target's API drifted; pick a different shape.");
+        var arguments = new Dictionary<string, object?>
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["name_contains"] = type.Name,
+        };
+
+        Assert.Equal("No types", await CallToolText("find_types", arguments));
+        Assert.Equal(
+            $"1 type:\n{type.FullName}",
+            await CallToolText("find_types", new(arguments) { ["accessibility"] = "all" }));
+    }
+
+    [Fact]
+    public async Task FindTypes_ByNameContains_FindsMatches()
+    {
+        string text = await CallToolText("find_types", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["name_contains"] = "decompiler",
+        });
+        var lines = text.Split('\n');
+        Assert.Matches(@"^\d+ types?:$", lines[0]);
+        Assert.Contains("ICSharpCode.Decompiler.CSharp.CSharpDecompiler", lines);
+    }
+
+    [Fact]
+    public async Task FindTypes_DefaultsToHidingRoslynClosureClasses()
     {
         // <>c is the canonical Roslyn name for the per-method cached-delegate
-        // host. Filtered by default — searching for it should return "No types
-        // match". With the flag off, the same search hits real entries.
-        string filtered = await CallToolText("search_types", new()
+        // host. Filtered by default — searching for it should return "No types".
+        // With the switch on, the same search hits real entries. The closure
+        // classes are private, so both calls ask for every accessibility.
+        string filtered = await CallToolText("find_types", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["pattern"] = "<>c",
+            ["name_contains"] = "<>c",
+            ["accessibility"] = "all",
         });
-        Assert.Contains("No types match", filtered);
+        Assert.Equal("No types", filtered);
 
-        string unfiltered = await CallToolText("search_types", new()
+        string unfiltered = await CallToolText("find_types", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["pattern"] = "<>c",
-            ["excludeCompilerGenerated"] = false,
+            ["name_contains"] = "<>c",
+            ["accessibility"] = "all",
+            ["include_compiler_generated"] = true,
         });
-        Assert.DoesNotContain("No types match", unfiltered);
+        Assert.NotEqual("No types", unfiltered);
     }
 
     [Fact]
-    public async Task SearchTypes_FiltersBurstDirectCallWrapperNestedType()
+    public async Task FindTypes_FiltersBurstDirectCallWrapperNestedType()
     {
-        // TASK-22 regression. Burst's source generator emits nested helper types
+        // Burst's source generator emits nested helper types
         // whose names carry `$BurstDirectCall` / `$PostfixBurstDelegate` suffixes
         // (the outer type is a regular user class, so the chain-walk in
         // CompilerGeneratedFilter only catches them via the inner name).
-        // '$' isn't a valid C# identifier character, so we can't reach this
-        // shape via a C# fixture project — synthesize a tiny PE on disk via
-        // PersistedAssemblyBuilder (System.Reflection.Emit, .NET 9+) and
-        // exercise the filter through the live MCP server.
-        var fixturePath = Path.Combine(
-            AppContext.BaseDirectory,
-            $"BurstWrapperFixture_{Guid.NewGuid():N}.dll");
+        // '$' isn't a valid C# identifier character, so no C# fixture project can
+        // produce this shape; BurstShapedAssembly writes one.
+        var fixturePath = BurstShapedAssembly.Write("0000ABCD", BurstShapedAssembly.Returns(1));
         try
         {
-            SynthesizeBurstWrapperFixture(fixturePath);
-
-            // Filter on by default — the nested `$BurstDirectCall` type drops out.
-            string filtered = await CallToolText("search_types", new()
+            // Filter on by default — the nested `$BurstDirectCall` type drops out. The
+            // type is internal, so both calls ask for every accessibility.
+            string filtered = await CallToolText("find_types", new()
             {
                 ["assembly"] = fixturePath,
-                ["pattern"] = "$BurstDirectCall",
+                ["name_contains"] = "$BurstDirectCall",
+                ["accessibility"] = "all",
             });
-            Assert.Contains("No types match", filtered);
+            Assert.Equal("No types", filtered);
 
             // Filter off — the same search hits the synthesized nested type.
-            string unfiltered = await CallToolText("search_types", new()
+            string unfiltered = await CallToolText("find_types", new()
             {
                 ["assembly"] = fixturePath,
-                ["pattern"] = "$BurstDirectCall",
-                ["excludeCompilerGenerated"] = false,
+                ["name_contains"] = "$BurstDirectCall",
+                ["accessibility"] = "all",
+                ["include_compiler_generated"] = true,
             });
-            Assert.DoesNotContain("No types match", unfiltered);
+            Assert.NotEqual("No types", unfiltered);
         }
         finally
         {
-            // Best-effort cleanup. The MCP server keeps the file mmapped while
-            // its host stays in the cache, so Delete can fail on Windows; the
-            // unique GUID in the path means a leftover doesn't collide.
-            try { if (File.Exists(fixturePath)) File.Delete(fixturePath); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+            BurstShapedAssembly.TryDelete(fixturePath);
         }
     }
 
-    /// <summary>
-    /// Build a one-type assembly with a Burst-style nested helper and save it
-    /// to disk. The outer type is a regular C# class; the inner type's name
-    /// carries the `$BurstDirectCall` suffix Unity's Burst source generator
-    /// emits, which is what TASK-22 teaches <see cref="ILens.CompilerGeneratedFilter"/>
-    /// to recognize.
-    /// </summary>
-    private static void SynthesizeBurstWrapperFixture(string path)
+    [Fact]
+    public async Task FindMethods_FiltersTheMethodBurstAddsToStartAWrapper()
     {
-        var aname = new AssemblyName("BurstWrapperFixture")
+        // Burst adds Initialize$Compute_HHHHHHHH$BurstDirectCall to the class it compiles a
+        // method of. It only starts the wrapper and holds nothing the developer wrote.
+        var path = BurstShapedAssembly.Write("0000ABCD", BurstShapedAssembly.Returns(1));
+        try
         {
-            Version = new Version(1, 0, 0, 0),
-        };
-        var ab = new PersistedAssemblyBuilder(aname, typeof(object).Assembly);
-        var mb = ab.DefineDynamicModule("BurstWrapperFixture");
+            string filtered = await CallToolText("find_methods", new()
+            {
+                ["assembly"] = path,
+                ["name_contains"] = "$BurstDirectCall",
+            });
+            Assert.Equal("No methods", filtered);
 
-        var container = mb.DefineType(
-            "BurstWrapperFixture.Container",
-            TypeAttributes.Public | TypeAttributes.Class);
-        container.DefineNestedType(
-            "Compute_0000ABCD$BurstDirectCall",
-            TypeAttributes.NestedPrivate | TypeAttributes.Class)
-            .CreateType();
-        container.CreateType();
-
-        ab.Save(path);
+            string unfiltered = await CallToolText("find_methods", new()
+            {
+                ["assembly"] = path,
+                ["name_contains"] = "$BurstDirectCall",
+                ["include_compiler_generated"] = true,
+            });
+            Assert.Contains("Initialize$Compute_0000ABCD$BurstDirectCall", unfiltered);
+        }
+        finally
+        {
+            BurstShapedAssembly.TryDelete(path);
+        }
     }
 
     [Fact]
-    public async Task ListTypes_DropsCountWhenCompilerGeneratedIsExcluded()
+    public async Task FindTypes_DropsCountWhenCompilerGeneratedIsExcluded()
     {
         // Any well-trafficked namespace in ICSharpCode.Decompiler.dll has
         // Roslyn helpers (display classes, anonymous types). The filtered set
         // must be strictly smaller — assert the count drops, without naming
-        // a specific generated type (whose presence drifts upstream).
-        string filtered = await CallToolText("list_types", new()
+        // a specific generated type (whose presence drifts upstream). Those
+        // helpers are private, so both calls ask for every accessibility.
+        string filtered = await CallToolText("find_types", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["namespaceName"] = "ICSharpCode.Decompiler.IL",
+            ["namespace"] = "ICSharpCode.Decompiler.IL",
+            ["accessibility"] = "all",
         });
-        string unfiltered = await CallToolText("list_types", new()
+        string unfiltered = await CallToolText("find_types", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["namespaceName"] = "ICSharpCode.Decompiler.IL",
-            ["excludeCompilerGenerated"] = false,
+            ["namespace"] = "ICSharpCode.Decompiler.IL",
+            ["accessibility"] = "all",
+            ["include_compiler_generated"] = true,
         });
 
         int filteredCount = ParseLeadingCount(filtered);
@@ -175,7 +234,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     }
 
     /// <summary>
-    /// Parses the leading "N types:" from list_types output. The tool's first
+    /// Parses the leading "N types:" from find_types output. The tool's first
     /// line is always "<count> types:" — pull the integer.
     /// </summary>
     private static int ParseLeadingCount(string text)
@@ -191,7 +250,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         string text = await CallToolText("find_methods", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["namePattern"] = "Decompile",
+            ["name_contains"] = "Decompile",
         });
         Assert.DoesNotContain("No methods match", text);
     }
@@ -199,10 +258,10 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     [Fact]
     public async Task DecompileType_OnAKnownType_YieldsPlausibleCSharp()
     {
-        string text = await CallToolText("decompile_type", new()
+        string text = await CallToolText("decompile", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.CSharp.CSharpDecompiler",
+            ["type_name"] = "ICSharpCode.Decompiler.CSharp.CSharpDecompiler",
         });
         Assert.Contains("CSharpDecompiler", text);
         Assert.Contains("class", text);
@@ -214,8 +273,8 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         string text = await CallToolText("analyze", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.CSharp.CSharpDecompiler",
-            ["kind"] = "UsedBy",
+            ["type_name"] = "ICSharpCode.Decompiler.CSharp.CSharpDecompiler",
+            ["kind"] = "used_by",
         });
         // Shape only — a non-empty report, no exception. The cross-references
         // themselves drift with the assembly.
@@ -228,11 +287,11 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         // ThrowOnAssemblyResolveErrors is a stable public property on
         // DecompilerSettings — our own AssemblyHost.cs uses it, so the test target
         // is build-guaranteed to expose the get_ accessor.
-        string text = await CallToolText("decompile_method", new()
+        string text = await CallToolText("decompile", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["methodName"] = "get_ThrowOnAssemblyResolveErrors",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["member_name"] = "get_ThrowOnAssemblyResolveErrors",
         });
         Assert.False(string.IsNullOrWhiteSpace(text));
         Assert.Contains("ThrowOnAssemblyResolveErrors", text);
@@ -241,29 +300,150 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         Assert.Contains("{", text);
     }
 
+    [Theory]
+    [InlineData("get")]
+    [InlineData("readonly get")]
+    [InlineData("set")]
+    [InlineData("init")]
+    [InlineData("add")]
+    [InlineData("remove")]
+    public async Task DecompileMethod_OnAnAccessor_ShowsItsKeyword(string declaration)
+    {
+        // An accessor decompiled on its own must still say which accessor it is: without the
+        // keyword, a getter printed its attributes and body alone, and a readonly getter a
+        // lone "readonly" line before the body.
+        var accessor = CoreLibAccessor(declaration);
+        string text = await DecompileCoreLibMethod(accessor.DeclaringType!, accessor.Name,
+            new() { ["parameter_count"] = accessor.GetParameters().Length });
+
+        Assert.Matches($@"(?m)^{declaration}\s*$", text);
+    }
+
+    // Members whose C# declaration carries a keyword that the metadata records as a reference
+    // type or a modifier: a ref and a ref readonly return, a ref readonly parameter, an init
+    // accessor.
+    [Theory]
+    [InlineData("System.Span<>", "Item", "public ref T Item[int index] { get; }")]
+    [InlineData("System.ReadOnlySpan<>", "Item", "public ref readonly T Item[int index] { get; }")]
+    [InlineData("System.Runtime.CompilerServices.Unsafe", "AsRef",
+        "public static ref T AsRef<T>(ref readonly T source)")]
+    [InlineData("System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute", "IsOptional",
+        "public bool IsOptional { get; init; }")]
+    public async Task ListMembers_WritesReferencesAndInitAsCSharp(string typeName, string name, string expected)
+    {
+        string text = await CallToolText("list_members", new()
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = typeName,
+            ["name_contains"] = name,
+        });
+
+        Assert.Contains(expected, text.Split('\n').Select(line => line.Trim()));
+        Assert.DoesNotContain("modreq", text);
+    }
+
+    [Fact]
+    public async Task ListMembers_OnAVolatileField_WritesVolatile()
+    {
+        // The metadata records volatile as a modreq on the field's type.
+        var field = typeof(object).Assembly.GetExportedTypes()
+            .Where(t => !t.IsGenericType)
+            .SelectMany(t => t.GetFields(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            .First(f => f.GetRequiredCustomModifiers().Any(m => m.Name == "IsVolatile"));
+
+        string text = await CallToolText("list_members", new()
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = field.DeclaringType!.FullName!,
+            ["name_contains"] = field.Name,
+            ["kinds"] = new[] { "field" },
+            ["accessibility"] = "all",
+        });
+
+        Assert.Matches($@"\bvolatile \S+ {System.Text.RegularExpressions.Regex.Escape(field.Name)}\b", text);
+        Assert.DoesNotContain("modreq", text);
+    }
+
+    // The first line of decompile writes each parameter and the return as C# does, and
+    // a parameter type copied from it selects the overload it came from.
+    [Theory]
+    [InlineData("System.Collections.Generic.Dictionary<,>", "TryGetValue", new[] { "TKey", "out TValue" },
+        "// System.Collections.Generic.Dictionary<,>.TryGetValue(TKey, out TValue) → bool")]
+    [InlineData("System.ReadOnlySpan<>", "get_Item", new[] { "int" },
+        "// System.ReadOnlySpan<>.get_Item(int) → ref readonly T")]
+    [InlineData("System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute", "set_IsOptional", new[] { "bool" },
+        "// System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute.set_IsOptional(bool) → void")]
+    [InlineData("System.Diagnostics.Tracing.EventSource", "Write", new[] { "string", "ref EventSourceOptions", "ref T" },
+        "// System.Diagnostics.Tracing.EventSource.Write(string, ref EventSourceOptions, ref T) → void")]
+    public async Task DecompileMethod_WritesReferencesAsCSharp_AndTakesThemBack(
+        string typeName, string methodName, string[] parameterTypes, string expectedHeader)
+    {
+        string text = await CallToolText("decompile", new()
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = typeName,
+            ["member_name"] = methodName,
+            ["parameter_types"] = parameterTypes,
+        });
+
+        Assert.StartsWith(expectedHeader + "\n", text);
+    }
+
+    /// <summary>
+    /// A public CoreLib accessor whose standalone declaration opens with
+    /// <paramref name="declaration"/>, such as <c>readonly get</c> or <c>init</c>.
+    /// </summary>
+    private static MethodInfo CoreLibAccessor(string declaration)
+    {
+        const BindingFlags Declared = BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+        static bool IsInitOnly(MethodInfo setter) =>
+            setter.ReturnParameter.GetRequiredCustomModifiers().Any(m => m.Name == "IsExternalInit");
+        static bool IsReadOnly(MemberInfo member) =>
+            member.CustomAttributes.Any(a => a.AttributeType.Name == "IsReadOnlyAttribute");
+
+        var types = typeof(object).Assembly.GetExportedTypes().Where(t => !t.IsGenericType);
+        return declaration switch
+        {
+            "get" => typeof(string).GetProperty(nameof(string.Length))!.GetMethod!,
+            "set" => typeof(System.Text.StringBuilder).GetProperty(nameof(System.Text.StringBuilder.Length))!.SetMethod!,
+            "readonly get" => types
+                .Where(t => t.IsValueType && !IsReadOnly(t))
+                .SelectMany(t => t.GetProperties(Declared))
+                .Select(p => p.GetMethod)
+                .First(g => g is { IsPublic: true } && IsReadOnly(g))!,
+            "init" => types
+                .SelectMany(t => t.GetProperties(Declared))
+                .Select(p => p.SetMethod)
+                .First(s => s is { IsPublic: true } && IsInitOnly(s))!,
+            "add" => typeof(AppDomain).GetEvent(nameof(AppDomain.ProcessExit))!.AddMethod!,
+            "remove" => typeof(AppDomain).GetEvent(nameof(AppDomain.ProcessExit))!.RemoveMethod!,
+            _ => throw new ArgumentOutOfRangeException(nameof(declaration)),
+        };
+    }
+
     [Fact]
     public async Task FindMethods_DoesNotEmitPropertyAccessors()
     {
         // Mirror of the decompile test above: find_methods deliberately hides
-        // accessors from generic browsing, so a name-pattern search for a known
-        // accessor should report zero matches even though decompile_method finds it.
+        // accessors from generic browsing, so a name search for a known accessor
+        // should report no methods even though decompile finds it.
         string text = await CallToolText("find_methods", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["namePattern"] = "get_ThrowOnAssemblyResolveErrors",
+            ["name_contains"] = "get_ThrowOnAssemblyResolveErrors",
         });
-        Assert.Contains("No methods match", text);
+        Assert.Equal("No methods", text);
     }
 
     [Fact]
-    public async Task ListTypes_OnAPathOutsideTheAllowedRoots_ReturnsError()
+    public async Task FindTypes_OnAPathOutsideTheAllowedRoots_ReturnsError()
     {
         var arguments = new Dictionary<string, object?>
         {
             ["assembly"] = @"C:\Windows\System32\kernel32.dll",
-            ["namespaceName"] = "System",
+            ["namespace"] = "System",
         };
-        CallToolResult result = await _server.Client.CallToolAsync("list_types", arguments);
+        CallToolResult result = await _server.Client.CallToolAsync("find_types", arguments);
 
         string text = string.Join(
             "\n", result.Content.OfType<TextContentBlock>().Select(block => block.Text));
@@ -297,11 +477,11 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             catch (UnauthorizedAccessException) { return; }
             catch (IOException) { return; }
 
-            CallToolResult result = await _server.Client.CallToolAsync("list_types",
+            CallToolResult result = await _server.Client.CallToolAsync("find_types",
                 new Dictionary<string, object?>
                 {
                     ["assembly"] = symlinkInside,
-                    ["namespaceName"] = "ICSharpCode.Decompiler",
+                    ["namespace"] = "ICSharpCode.Decompiler",
                 });
 
             string text = string.Join(
@@ -341,13 +521,13 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             .Select(p => p.ParameterType.Name)
             .ToArray();
 
-        string text = await CallToolText("decompile_method", new()
+        string text = await CallToolText("decompile", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = type.FullName!,
-            ["methodName"] = overload.Name,
-            ["parameterCount"] = overload.GetParameters().Length,
-            ["parameterTypes"] = parameterTypeNames,
+            ["type_name"] = type.FullName!,
+            ["member_name"] = overload.Name,
+            ["parameter_count"] = overload.GetParameters().Length,
+            ["parameter_types"] = parameterTypeNames,
         });
 
         Assert.False(string.IsNullOrWhiteSpace(text));
@@ -361,7 +541,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     {
         // Companion to the test above: that one feeds reflection-short-name parameter
         // types ("Boolean", "Int32"); this one feeds the C# keyword form ("bool", "int")
-        // — what find_methods and decompile_method's "Available: ..." error message
+        // — what find_methods and decompile's "Available: ..." error message
         // both render. The matcher must accept that form too, since it is what an LLM
         // is most likely to feed back in. Selecting a same-arity overload group keeps the
         // test honest about why it passes: DisambiguateMethod no longer short-circuits on
@@ -391,13 +571,13 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             .Select(p => CSharpKeyword(p.ParameterType.Name) ?? p.ParameterType.Name)
             .ToArray();
 
-        string text = await CallToolText("decompile_method", new()
+        string text = await CallToolText("decompile", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = type.FullName!,
-            ["methodName"] = method.Name,
-            ["parameterCount"] = method.GetParameters().Length,
-            ["parameterTypes"] = parameterTypeNames,
+            ["type_name"] = type.FullName!,
+            ["member_name"] = method.Name,
+            ["parameter_count"] = method.GetParameters().Length,
+            ["parameter_types"] = parameterTypeNames,
         });
 
         Assert.False(string.IsNullOrWhiteSpace(text));
@@ -407,13 +587,13 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     [Fact]
     public async Task FindMethods_WithCSharpKeywordParameterTypes_ReturnsMatches()
     {
-        // TypeMatcher backs both decompile_method and find_methods. The keyword-form
+        // TypeMatcher backs both decompile and find_methods. The keyword-form
         // fix must benefit both consumers. Any reasonably-sized .NET library has
         // methods taking a single string parameter, so "string" must yield matches.
         string text = await CallToolText("find_methods", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["parameterTypes"] = new[] { "string" },
+            ["parameter_types"] = new[] { "string" },
         });
         Assert.DoesNotContain("No methods match", text);
     }
@@ -435,11 +615,11 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         });
         await using var tightClient = await McpClient.CreateAsync(transport);
 
-        CallToolResult result = await tightClient.CallToolAsync("list_types",
+        CallToolResult result = await tightClient.CallToolAsync("find_types",
             new Dictionary<string, object?>
             {
                 ["assembly"] = _server.AssemblyPath,
-                ["namespaceName"] = "ICSharpCode.Decompiler",
+                ["namespace"] = "ICSharpCode.Decompiler",
             });
 
         string text = string.Join(
@@ -451,13 +631,89 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     }
 
     [Fact]
+    public async Task GetOrLoad_ClosesAssembliesWhenACallEndsOverTheMemoryBudget()
+    {
+        // Loading an assembly makes the decompiler open the assemblies it references from the
+        // same directory, and closing the host must close them again. Each server gets its own
+        // copy of ExternalUser.dll beside its reference ExternalLib.dll. Under the default budget
+        // the host stays cached after the call, so the reference stays open, which shows the
+        // check can fail at all. Under a 1 MB budget, below what ILens needs with nothing open,
+        // every host is closed when its call ends, so the reference is free once the call has
+        // answered, and the next call on the assembly opens it again and answers alike.
+        string root = Path.Combine(Path.GetTempPath(), "ILens-budget-" + Guid.NewGuid().ToString("N"));
+        string cached = CopyUserAndReference("Cached");
+        string closed = CopyUserAndReference("Closed");
+
+        try
+        {
+            await using (var client = await StartServer("ILens-budget-default", root))
+            {
+                await FindTypes(client, Path.Combine(cached, "ExternalUser.dll"));
+                Assert.False(CanOpenExclusively(Path.Combine(cached, "ExternalLib.dll")),
+                    "The reference should be open while its host is cached.");
+            }
+
+            await using (var client = await StartServer("ILens-budget-tight", root, "--max-total-size", "1"))
+            {
+                string first = await FindTypes(client, Path.Combine(closed, "ExternalUser.dll"));
+                Assert.True(CanOpenExclusively(Path.Combine(closed, "ExternalLib.dll")),
+                    "The host should have been closed when its call ended, and with it the reference it opened.");
+                Assert.Equal(first, await FindTypes(client, Path.Combine(closed, "ExternalUser.dll")));
+            }
+        }
+        finally
+        {
+            await ILensServerFixture.DeleteWhenReleased(root);
+        }
+
+        string CopyUserAndReference(string folder)
+        {
+            string binDir = Path.GetDirectoryName(_server.AssemblyPath)!;
+            string dir = Directory.CreateDirectory(Path.Combine(root, folder)).FullName;
+            File.Copy(Path.Combine(binDir, "ExternalUser.dll"), Path.Combine(dir, "ExternalUser.dll"));
+            File.Copy(Path.Combine(binDir, "References", "ExternalLib.dll"), Path.Combine(dir, "ExternalLib.dll"));
+            return dir;
+        }
+
+        static async Task<McpClient> StartServer(string name, string root, params string[] options) =>
+            await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            {
+                Name = name,
+                Command = ILensServerFixture.ResolveILensExecutable(),
+                Arguments = ["--allow-root", root, .. options],
+            }));
+
+        static async Task<string> FindTypes(McpClient client, string assembly)
+        {
+            CallToolResult result = await client.CallToolAsync("find_types",
+                new Dictionary<string, object?> { ["assembly"] = assembly });
+            string text = string.Join("\n", result.Content.OfType<TextContentBlock>().Select(b => b.Text));
+            Assert.True(result.IsError != true, text);
+            return text;
+        }
+
+        static bool CanOpenExclusively(string path)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+                return true;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+    }
+
+    [Fact]
     public async Task Analyze_ImplementedBy_OnAnInterface_ListsImplementers()
     {
         // ImplementedBy at the type level is synthesized in-process — ILSpyX ships
         // only member-level analyzers for the "Implemented By" header. Discover a
         // suitable interface/implementer pair via reflection so the test stays
         // valid as the upstream package drifts. Restrict to non-generic, non-nested
-        // types so the reflection FullName matches ILSpy's ITypeDefinition.FullName.
+        // types, whose names reflection's FullName and ILens spell alike.
         var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
         var exported = assembly.GetExportedTypes()
             .Where(t => !t.IsGenericType && !t.IsNested)
@@ -479,8 +735,8 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         string text = await CallToolText("analyze", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = pair.Interface.FullName!,
-            ["kind"] = "ImplementedBy",
+            ["type_name"] = pair.Interface.FullName!,
+            ["kind"] = "implemented_by",
         });
 
         Assert.False(string.IsNullOrWhiteSpace(text));
@@ -498,8 +754,8 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             new Dictionary<string, object?>
             {
                 ["assembly"] = _server.AssemblyPath,
-                ["typeName"] = "ICSharpCode.Decompiler.CSharp.CSharpDecompiler",
-                ["kind"] = "ImplementedBy",
+                ["type_name"] = "ICSharpCode.Decompiler.CSharp.CSharpDecompiler",
+                ["kind"] = "implemented_by",
             });
 
         string text = string.Join(
@@ -520,8 +776,8 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             new Dictionary<string, object?>
             {
                 ["assembly"] = _server.AssemblyPath,
-                ["typeName"] = "ICSharpCode.Decompiler.CSharp.CSharpDecompiler",
-                ["kind"] = "AppliedTo",
+                ["type_name"] = "ICSharpCode.Decompiler.CSharp.CSharpDecompiler",
+                ["kind"] = "applied_to",
             });
 
         string text = string.Join(
@@ -541,16 +797,16 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         string viaProperty = await CallToolText("analyze", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["memberName"] = "ThrowOnAssemblyResolveErrors",
-            ["kind"] = "ReadBy",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["member_name"] = "ThrowOnAssemblyResolveErrors",
+            ["kind"] = "read_by",
         });
         string viaAccessor = await CallToolText("analyze", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["memberName"] = "get_ThrowOnAssemblyResolveErrors",
-            ["kind"] = "UsedBy",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["member_name"] = "get_ThrowOnAssemblyResolveErrors",
+            ["kind"] = "used_by",
         });
 
         Assert.Equal(ResultBody(viaAccessor), ResultBody(viaProperty));
@@ -565,9 +821,9 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         string text = await CallToolText("analyze", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["memberName"] = "ThrowOnAssemblyResolveErrors",
-            ["kind"] = "UsedBy",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["member_name"] = "ThrowOnAssemblyResolveErrors",
+            ["kind"] = "used_by",
         });
         Assert.Contains(
             "(via get_ThrowOnAssemblyResolveErrors, set_ThrowOnAssemblyResolveErrors)", text);
@@ -577,15 +833,12 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         string readers = await CallToolText("analyze", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["memberName"] = "ThrowOnAssemblyResolveErrors",
-            ["kind"] = "ReadBy",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["member_name"] = "ThrowOnAssemblyResolveErrors",
+            ["kind"] = "read_by",
         });
-        // Skip the empty-result sentinel: were upstream drift to leave the getter with no
-        // callers, asserting that "(no results)" appears in a non-empty union would fail
-        // for a reason that has nothing to do with the merge being tested.
         string readerBody = ResultBody(readers);
-        if (readerBody.Trim() != "(no results)")
+        if (readerBody.Length > 0)
         {
             foreach (string caller in readerBody.Split('\n'))
                 Assert.Contains(caller, text);
@@ -601,22 +854,22 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         string viaProperty = await CallToolText("analyze", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["memberName"] = "ThrowOnAssemblyResolveErrors",
-            ["kind"] = "Uses",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["member_name"] = "ThrowOnAssemblyResolveErrors",
+            ["kind"] = "uses",
         });
         string viaGetter = await CallToolText("analyze", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["memberName"] = "get_ThrowOnAssemblyResolveErrors",
-            ["kind"] = "Uses",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["member_name"] = "get_ThrowOnAssemblyResolveErrors",
+            ["kind"] = "uses",
         });
 
         Assert.Contains(
             "(via get_ThrowOnAssemblyResolveErrors, set_ThrowOnAssemblyResolveErrors)", viaProperty);
         string getterBody = ResultBody(viaGetter);
-        if (getterBody.Trim() != "(no results)")
+        if (getterBody.Length > 0)
         {
             foreach (string used in getterBody.Split('\n'))
                 Assert.Contains(used, viaProperty);
@@ -633,16 +886,16 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             new Dictionary<string, object?>
             {
                 ["assembly"] = _server.AssemblyPath,
-                ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-                ["memberName"] = "PropertyChanged",
-                ["kind"] = "Uses",
+                ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+                ["member_name"] = "PropertyChanged",
+                ["kind"] = "uses",
             });
 
         string text = string.Join(
             "\n", result.Content.OfType<TextContentBlock>().Select(b => b.Text));
         Assert.True(result.IsError, $"Expected Uses-on-event rejection, got: {text}");
         Assert.Contains("not valid for Event", text);
-        Assert.Contains("UsedBy", text);
+        Assert.Contains("used_by", text);
     }
 
     [Fact]
@@ -655,9 +908,9 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             new Dictionary<string, object?>
             {
                 ["assembly"] = _server.AssemblyPath,
-                ["typeName"] = "ICSharpCode.Decompiler.CSharp.CSharpDecompiler",
-                ["memberName"] = "TypeSystem",
-                ["kind"] = "AssignedBy",
+                ["type_name"] = "ICSharpCode.Decompiler.CSharp.CSharpDecompiler",
+                ["member_name"] = "TypeSystem",
+                ["kind"] = "assigned_by",
             });
 
         string text = string.Join(
@@ -680,9 +933,9 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         string text = await CallToolText("analyze", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["memberName"] = "PropertyChanged",
-            ["kind"] = "UsedBy",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["member_name"] = "PropertyChanged",
+            ["kind"] = "used_by",
         });
         Assert.Contains(
             "(via add_PropertyChanged, remove_PropertyChanged, the subscriber list)", text);
@@ -706,9 +959,9 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         string text = await CallToolText("analyze", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["memberName"] = "PropertyChanged",
-            ["kind"] = "OverriddenBy",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["member_name"] = "PropertyChanged",
+            ["kind"] = "overridden_by",
         });
         Assert.DoesNotContain("ambiguous", text);
         Assert.Contains("PropertyChanged", text);
@@ -717,7 +970,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     [Fact]
     public async Task ListMembers_AcceptsAScalarWhereTheSchemaDeclaresAnArray()
     {
-        // "Field" instead of ["Field"] is a routine slip, and the SDK's binder answers it
+        // "field" instead of ["field"] is a routine slip, and the SDK's binder answers it
         // with a raw serializer failure naming an internal type. There is only one thing a
         // lone value can mean, so ArrayCoercionFilter promotes it — the two calls must be
         // indistinguishable.
@@ -727,19 +980,19 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         var arguments = new Dictionary<string, object?>
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["accessibility"] = "All",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["accessibility"] = "all",
         };
         string scalar = await CallToolText("list_members",
-            new(arguments) { ["kinds"] = "Field" });
+            new(arguments) { ["kinds"] = "field" });
         string array = await CallToolText("list_members",
-            new(arguments) { ["kinds"] = new[] { "Field" } });
+            new(arguments) { ["kinds"] = new[] { "field" } });
 
         Assert.Equal(array, scalar);
-        // Match the section headers, not the bare words — a field named "anonymousMethods"
+        // Match the group headers, not the bare words — a field named "anonymousMethods"
         // contains "Methods" and would make a looser check pass for the wrong reason.
-        Assert.Contains("\nFields (", scalar);
-        Assert.DoesNotContain("\nMethods (", scalar);
+        Assert.Matches(@"\n\d+ fields?:", scalar);
+        Assert.DoesNotMatch(@"\n\d+ methods?:", scalar);
     }
 
     [Fact]
@@ -750,12 +1003,12 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         var arguments = new Dictionary<string, object?>
         {
             ["assembly"] = _server.AssemblyPath,
-            ["declaringType"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
         };
         string scalar = await CallToolText("find_methods",
-            new(arguments) { ["parameterTypes"] = "string" });
+            new(arguments) { ["parameter_types"] = "string" });
         string array = await CallToolText("find_methods",
-            new(arguments) { ["parameterTypes"] = new[] { "string" } });
+            new(arguments) { ["parameter_types"] = new[] { "string" } });
 
         Assert.Equal(array, scalar);
         // Two identical "no matches" replies would also be equal, so require that the
@@ -768,13 +1021,13 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     {
         // ThrowOnAssemblyResolveErrors is the same stable public property that
         // DecompileMethod_OnAPropertyGetter_... targets via the get_ prefix.
-        // decompile_property takes the unprefixed name and returns the whole
+        // decompile takes the unprefixed name and returns the whole
         // property declaration (signature plus accessor bodies).
-        string text = await CallToolText("decompile_property", new()
+        string text = await CallToolText("decompile", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["propertyName"] = "ThrowOnAssemblyResolveErrors",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["member_name"] = "ThrowOnAssemblyResolveErrors",
         });
         Assert.False(string.IsNullOrWhiteSpace(text));
         Assert.Contains("ThrowOnAssemblyResolveErrors", text);
@@ -799,11 +1052,11 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
                 "No read-write public property found in ICSharpCode.Decompiler.dll — " +
                 "the test target's API drifted; pick a different shape.");
 
-        string text = await CallToolText("decompile_property", new()
+        string text = await CallToolText("decompile", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = pair.Type.FullName!,
-            ["propertyName"] = pair.Property.Name,
+            ["type_name"] = pair.Type.FullName!,
+            ["member_name"] = pair.Property.Name,
         });
         Assert.False(string.IsNullOrWhiteSpace(text));
         Assert.Contains(pair.Property.Name, text);
@@ -816,12 +1069,12 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     [Fact]
     public async Task DecompileProperty_OnAMissingProperty_ReturnsError()
     {
-        CallToolResult result = await _server.Client.CallToolAsync("decompile_property",
+        CallToolResult result = await _server.Client.CallToolAsync("decompile",
             new Dictionary<string, object?>
             {
                 ["assembly"] = _server.AssemblyPath,
-                ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-                ["propertyName"] = "ThisPropertyDoesNotExist",
+                ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+                ["member_name"] = "ThisPropertyDoesNotExist",
             });
 
         string text = string.Join(
@@ -833,26 +1086,16 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     [Fact]
     public async Task DecompileProperty_OnAnIndexerWithMultipleOverloads_ReturnsAmbiguityError()
     {
-        // Discover a type in the test target with two-or-more indexers. If the
-        // upstream package exposes none, the test bails out — the SymbolResolver
-        // ambiguity branch then stays exercised only by the resolver change itself,
-        // and will become end-to-end-covered as soon as a multi-indexer type lands
-        // in the assembly.
-        var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
-        var typeWithMultipleIndexers = assembly.GetExportedTypes()
-            .Where(t => !t.IsGenericType && !t.IsNested)
-            .FirstOrDefault(t => t.GetProperties(PublicDeclared)
-                .Count(p => p.GetIndexParameters().Length > 0) >= 2);
+        // ICSharpCode.Decompiler.dll declares no type with two public indexers, so the target
+        // comes from CoreLib.
+        var (type, _) = CoreLibTypeWithTwoIndexers();
 
-        if (typeWithMultipleIndexers == null)
-            return;
-
-        CallToolResult result = await _server.Client.CallToolAsync("decompile_property",
+        CallToolResult result = await _server.Client.CallToolAsync("decompile",
             new Dictionary<string, object?>
             {
-                ["assembly"] = _server.AssemblyPath,
-                ["typeName"] = typeWithMultipleIndexers.FullName!,
-                ["propertyName"] = "Item",
+                ["assembly"] = _server.CoreLibPath,
+                ["type_name"] = type.FullName!,
+                ["member_name"] = "Item",
             });
 
         string text = string.Join(
@@ -860,7 +1103,63 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         Assert.True(result.IsError,
             $"Expected indexer-ambiguity rejection, got: {text}");
         Assert.Contains("overloads", text);
-        Assert.Contains("decompile_method", text);
+        Assert.Contains("name its accessor instead, get_Item or set_Item, with parameter_types", text);
+    }
+
+    [Fact]
+    public async Task Analyze_OnAnIndexerNameSeveralIndexersShare_ListsThemInsteadOfAnsweringForOne()
+    {
+        // Answering for the first indexer alone would leave out the readers of the others,
+        // with nothing in the answer to show that it did.
+        var (type, indexers) = CoreLibTypeWithTwoIndexers();
+
+        var (result, text) = await CallToolExpectingError("analyze", new()
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = type.FullName!,
+            ["member_name"] = "Item",
+            ["kind"] = "read_by",
+        });
+
+        Assert.True(result.IsError, $"Expected indexer-ambiguity rejection, got: {text}");
+        Assert.Contains("name its accessor instead, get_Item or set_Item, with parameter_types", text);
+        foreach (var indexer in indexers)
+        {
+            string indices = string.Join(", ", indexer.GetIndexParameters().Select(p => RenderTypeReference(p.ParameterType)));
+            Assert.Contains($"{type.FullName}.Item[{indices}]", text);
+        }
+    }
+
+    [Fact]
+    public async Task DecompileAndAnalyze_OnAnIndexer_NameItWithItsIndices()
+    {
+        // An indexer's name is shared by every indexer of its type, so an answer naming one
+        // says which by its index types. String's only indexer is renamed Chars by
+        // [IndexerName], so the indices follow whatever name the indexer carries.
+        var indexer = typeof(string).GetProperties(PublicDeclared)
+            .Single(p => p.GetIndexParameters().Length > 0);
+        string indices = string.Join(", ",
+            indexer.GetIndexParameters().Select(p => RenderTypeReference(p.ParameterType)));
+        string expected = $"System.String.{indexer.Name}[{indices}]";
+
+        string decompiled = await CallToolText("decompile", new()
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = "System.String",
+            ["member_name"] = indexer.Name,
+        });
+        Assert.Equal($"// {expected}", decompiled.Split('\n')[0]);
+
+        string analyzed = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = "System.String",
+            ["member_name"] = indexer.Name,
+            ["kind"] = "read_by",
+        });
+        Assert.Matches(
+            $@"^(\d+ readers?|No readers) of {System.Text.RegularExpressions.Regex.Escape(expected)} ",
+            analyzed);
     }
 
     [Fact]
@@ -868,7 +1167,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     {
         // Reflection-discover a public event declared on a type in the test target.
         // If the upstream package exposes no public events, the test bails out —
-        // decompile_event's happy path stays unverified until one lands.
+        // decompiling an event stays unverified until one lands.
         var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
         var pair = assembly.GetExportedTypes()
             .Where(t => !t.IsGenericType && !t.IsNested)
@@ -879,11 +1178,11 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         if (pair == null)
             return;
 
-        string text = await CallToolText("decompile_event", new()
+        string text = await CallToolText("decompile", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = pair.Type.FullName!,
-            ["eventName"] = pair.Event.Name,
+            ["type_name"] = pair.Type.FullName!,
+            ["member_name"] = pair.Event.Name,
         });
         Assert.False(string.IsNullOrWhiteSpace(text));
         Assert.Contains(pair.Event.Name, text);
@@ -899,17 +1198,17 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         // The regression that matters most: a disambiguation hint is a filter that must be
         // satisfied, not a tie-breaker only consulted when several candidates survive.
         // DisambiguateMethod used to return early on a single candidate, so asking
-        // Verse.Thing for Equals(object) — which does not exist — handed back Equals(Thing)
+        // Shapes.Circle for Equals(object) — which does not exist — handed back Equals(Circle)
         // and read as proof of value equality: the exact opposite of the truth.
         // A single-overload method is therefore the essential shape to test.
         var method = SingleOverloadMethod(excludingArity: ImpossibleArity);
 
-        var (result, text) = await CallToolExpectingError("decompile_method", new()
+        var (result, text) = await CallToolExpectingError("decompile", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = method.DeclaringType!.FullName!,
-            ["methodName"] = method.Name,
-            ["parameterTypes"] = Enumerable.Repeat("object", ImpossibleArity).ToArray(),
+            ["type_name"] = method.DeclaringType!.FullName!,
+            ["member_name"] = method.Name,
+            ["parameter_types"] = Enumerable.Repeat("object", ImpossibleArity).ToArray(),
         });
 
         Assert.True(result.IsError,
@@ -924,16 +1223,16 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     [Fact]
     public async Task DecompileMethod_WithParameterCountMatchingNoOverload_ReturnsError()
     {
-        // Companion to the test above: parameterCount is the other hint that was skipped
+        // Companion to the test above: parameter_count is the other hint that was skipped
         // for a lone candidate, and it takes a separate branch in DisambiguateMethod.
         var method = SingleOverloadMethod(excludingArity: ImpossibleArity);
 
-        var (result, text) = await CallToolExpectingError("decompile_method", new()
+        var (result, text) = await CallToolExpectingError("decompile", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = method.DeclaringType!.FullName!,
-            ["methodName"] = method.Name,
-            ["parameterCount"] = ImpossibleArity,
+            ["type_name"] = method.DeclaringType!.FullName!,
+            ["member_name"] = method.Name,
+            ["parameter_count"] = ImpossibleArity,
         });
 
         Assert.True(result.IsError,
@@ -945,22 +1244,21 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     [Fact]
     public async Task DecompileMethod_WithHintMatchingOnlyABaseOverload_ResolvesToTheBaseMethod()
     {
-        // TASK-24: C# overload resolution spans the inheritance chain. When the requested type
-        // declares Bar(int) and a base declares Bar(string), asking for Bar(string) used to be
-        // rejected — TryFindMethod stopped at the first level that had the *name* and matched
-        // the hint only against that level. It now keeps walking to the base, so the base-only
+        // C# overload resolution spans the inheritance chain. When the requested type declares
+        // Bar(int) and a base declares Bar(string), asking for Bar(string) must not stop at the
+        // first level that has the *name*: resolution keeps walking to the base, so the base-only
         // overload resolves and decompiles, tagged with its inherited origin.
         var (derived, name, baseOverload) = MethodWithBaseOnlyOverload();
         var paramTypes = baseOverload.GetParameters()
             .Select(p => CSharpKeyword(p.ParameterType.Name) ?? p.ParameterType.Name)
             .ToArray();
 
-        string text = await CallToolText("decompile_method", new()
+        string text = await CallToolText("decompile", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = derived.FullName!,
-            ["methodName"] = name,
-            ["parameterTypes"] = paramTypes,
+            ["type_name"] = derived.FullName!,
+            ["member_name"] = name,
+            ["parameter_types"] = paramTypes,
         });
 
         // A body brace proves resolution reached a real method instead of erroring.
@@ -979,11 +1277,11 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         // substitution. The header carries the full resolved signature instead.
         var method = SingleOverloadMethod(excludingArity: ImpossibleArity);
 
-        string text = await CallToolText("decompile_method", new()
+        string text = await CallToolText("decompile", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["typeName"] = method.DeclaringType!.FullName!,
-            ["methodName"] = method.Name,
+            ["type_name"] = method.DeclaringType!.FullName!,
+            ["member_name"] = method.Name,
         });
 
         // Parameter list and return arrow, not just the bare name.
@@ -991,28 +1289,80 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         Assert.Contains("→", text);
     }
 
+    [Theory]
+    [InlineData("parameter_name", "count", "parameter_name and non_default_only apply only to kind 'call_sites'.")]
+    [InlineData("non_default_only", true, "parameter_name and non_default_only apply only to kind 'call_sites'.")]
+    [InlineData("parameter_count", 0, "parameter_count and parameter_types select a method overload, so they need member_name.")]
+    public async Task Analyze_WithAParameterTheQuestionCannotUse_ReturnsError(string parameter, object value, string expected)
+    {
+        // Dropped silently, the parameter would leave the answer to a broader question looking
+        // like the answer to the one asked.
+        var (result, text) = await CallToolExpectingError("analyze", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["kind"] = "used_by",
+            [parameter] = value,
+        });
+
+        Assert.True(result.IsError, $"Expected an error, got: {text}");
+        Assert.Contains(expected, text);
+    }
+
+    [Fact]
+    public async Task Decompile_WithAnOverloadHintButNoMember_ReturnsError()
+    {
+        // A hint selects a method overload. Without member_name it would be dropped silently
+        // and the whole type returned as if that were the answer.
+        var (result, text) = await CallToolExpectingError("decompile", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["parameter_count"] = 0,
+        });
+
+        Assert.True(result.IsError, $"Expected an error, got: {text}");
+        Assert.Contains(
+            "parameter_count and parameter_types select a method overload, so they need member_name.", text);
+    }
+
+    [Fact]
+    public async Task FindMethods_WithANamespaceThatDoesNotExist_ReturnsError()
+    {
+        // An exact namespace asserts it exists; answering a misspelling with "No methods"
+        // would read as a namespace without such methods.
+        var (result, text) = await CallToolExpectingError("find_methods", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["namespace"] = "ICSharpCode.Decompiler.TypeSystm",
+        });
+
+        Assert.True(result.IsError, $"Expected an error, got: {text}");
+        Assert.Contains("Namespace not found: ICSharpCode.Decompiler.TypeSystm.", text);
+    }
+
     [Fact]
     public async Task FindMethods_WithUnknownArgument_ReturnsErrorNamingValidArguments()
     {
-        // The reported call: typeName/methodName are decompile_method's parameters, not
-        // find_methods'. The SDK drops unrecognized keys, and because every find_methods
-        // filter is optional the call used to run completely unfiltered and return the
-        // whole assembly — a wrong answer wearing the shape of a right one.
+        // Names find_methods does not take: typeName in camelCase, and method_name, which no
+        // tool takes. The SDK drops unrecognized keys, and because every find_methods filter is
+        // optional, such a call would run unfiltered and return the whole assembly — a wrong
+        // answer wearing the shape of a right one.
         var (result, text) = await CallToolExpectingError("find_methods", new()
         {
             ["assembly"] = _server.AssemblyPath,
             ["typeName"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["methodName"] = "Equals",
+            ["method_name"] = "Equals",
         });
 
         Assert.True(result.IsError,
             $"Expected unrecognized arguments to be rejected rather than ignored, got: {text}");
         Assert.Contains("Unknown argument", text);
         Assert.Contains("typeName", text);
-        Assert.Contains("methodName", text);
+        Assert.Contains("method_name", text);
         // Naming the valid set is what turns this into a one-round-trip fix.
-        Assert.Contains("namePattern", text);
-        Assert.Contains("declaringType", text);
+        Assert.Contains("name_contains", text);
+        Assert.Contains("type_name", text);
     }
 
     [Fact]
@@ -1023,19 +1373,14 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         string text = await CallToolText("find_methods", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["declaringType"] = type.FullName!,
-            ["accessibility"] = "All",
+            ["type_name"] = type.FullName!,
+            ["accessibility"] = "all",
             ["limit"] = 200,
         });
 
-        Assert.DoesNotContain("No methods match", text);
-        // Every emitted result line is indented; each must belong to the requested type.
-        var resultLines = text.Split('\n')
-            .Where(line => line.StartsWith("  ") && !line.StartsWith("  ..."))
-            .ToList();
+        var resultLines = FindMethodsResultLines(text);
         Assert.NotEmpty(resultLines);
-        Assert.All(resultLines, line =>
-            Assert.Contains($"{type.FullName}.", line));
+        Assert.All(resultLines, line => Assert.StartsWith($"{type.FullName}.", line));
     }
 
     [Fact]
@@ -1046,7 +1391,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         var (result, text) = await CallToolExpectingError("find_methods", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["declaringType"] = "ICSharpCode.Decompiler.ThisTypeDoesNotExist",
+            ["type_name"] = "ICSharpCode.Decompiler.ThisTypeDoesNotExist",
         });
 
         Assert.True(result.IsError, $"Expected a type-not-found rejection, got: {text}");
@@ -1059,13 +1404,627 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         var (result, text) = await CallToolExpectingError("find_methods", new()
         {
             ["assembly"] = _server.AssemblyPath,
-            ["declaringType"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["declaringTypePattern"] = "Decompiler",
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["type_name_contains"] = "Decompiler",
         });
 
         Assert.True(result.IsError, $"Expected a mutually-exclusive rejection, got: {text}");
         Assert.Contains("mutually exclusive", text);
     }
+
+    [Fact]
+    public async Task TypeNameParameters_OnANestedType_AcceptReflectionAndDottedForm()
+    {
+        // .NET reflection names a nested type Outer+Inner, ILens prints Outer.Inner. Both
+        // name the same type, so both must resolve to the same answer.
+        string reflectionForm = NestedTypeWithMethods().FullName!;
+        string dottedForm = reflectionForm.Replace('+', '.');
+
+        foreach (var (tool, parameter) in new[] { ("list_members", "type_name"), ("find_methods", "type_name") })
+        {
+            string viaDotted = await CallToolText(tool, new()
+            {
+                ["assembly"] = _server.AssemblyPath,
+                [parameter] = dottedForm,
+                ["accessibility"] = "all",
+            });
+            string viaReflection = await CallToolText(tool, new()
+            {
+                ["assembly"] = _server.AssemblyPath,
+                [parameter] = reflectionForm,
+                ["accessibility"] = "all",
+            });
+
+            Assert.Contains(dottedForm, viaDotted);
+            Assert.Equal(viaDotted, viaReflection);
+        }
+    }
+
+    [Fact]
+    public async Task FindMethods_WithANestedReturnType_MatchesReflectionAndDottedForm()
+    {
+        // A type pattern may be a full name, so a nested one comes in either form too.
+        var method = MethodReturningANestedType();
+        string reflectionForm = method.ReturnType.FullName!;
+
+        var results = new List<string>();
+        foreach (string pattern in new[] { reflectionForm.Replace('+', '.'), reflectionForm })
+        {
+            results.Add(await CallToolText("find_methods", new()
+            {
+                ["assembly"] = _server.AssemblyPath,
+                ["name_contains"] = method.Name,
+                ["return_type"] = pattern,
+                ["accessibility"] = "all",
+            }));
+        }
+
+        Assert.Contains($".{method.Name}(", results[0]);
+        Assert.Equal(results[0], results[1]);
+    }
+
+    [Fact]
+    public async Task TypeName_SharedWithAGenericType_ResolvesByArity()
+    {
+        // Like Task and Task<TResult>, the two types share a name apart from their arity.
+        // Without type parameters the name means the non-generic type, as in C# and
+        // reflection; every spelling of the arity reaches the generic one.
+        var (plain, generic) = NonGenericTypeWithAGenericNamesake();
+        string bare = plain.FullName!;
+        string unbound = UnboundName(generic);
+
+        Assert.Equal(bare, DeclaredTypeName(await ListAllMembers(bare)));
+
+        string viaUnbound = await ListAllMembers(unbound);
+        string parameterNames = string.Join(", ", generic.GetGenericArguments().Select(a => a.Name));
+        Assert.Equal($"{bare}<{parameterNames}>", DeclaredTypeName(viaUnbound));
+        foreach (string spelling in new[] { generic.FullName!, $"{bare}<{parameterNames}>" })
+            Assert.Equal(viaUnbound, await ListAllMembers(spelling));
+    }
+
+    [Fact]
+    public async Task TypeName_SharedOnlyByGenericTypes_IsAnErrorListingThem()
+    {
+        // As with System.Func, no type of that name is non-generic, so the name alone
+        // cannot say which one is meant.
+        var group = SharedNameGroups().FirstOrDefault(g => g.All(t => t.IsGenericTypeDefinition))
+            ?? throw new InvalidOperationException(
+                "No name shared only by generic types found in ICSharpCode.Decompiler.dll — " +
+                "the test target's API drifted; pick a different assembly or test shape.");
+
+        var (result, text) = await CallToolExpectingError("list_members", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["type_name"] = group[0].FullName!.Split('`')[0],
+        });
+
+        Assert.True(result.IsError, $"Expected an ambiguity rejection, got: {text}");
+        Assert.All(group, type => Assert.Contains(UnboundName(type), text));
+    }
+
+    [Fact]
+    public async Task FindTypes_OnASharedName_ListsEachTypeByItsArity()
+    {
+        var (plain, generic) = NonGenericTypeWithAGenericNamesake();
+
+        string text = await CallToolText("find_types", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["name_contains"] = plain.Name,
+            ["accessibility"] = "all",
+        });
+
+        var lines = text.Split('\n');
+        Assert.Contains(plain.FullName!, lines);
+        Assert.Contains(UnboundName(generic), lines);
+    }
+
+    [Fact]
+    public async Task FindMethods_WithADeclaringTypeThatSharesItsName_ListsOnlyThatType()
+    {
+        var (plain, generic) = NonGenericTypeWithAGenericNamesake();
+
+        foreach (string declaringType in new[] { plain.FullName!, UnboundName(generic) })
+        {
+            string text = await CallToolText("find_methods", new()
+            {
+                ["assembly"] = _server.AssemblyPath,
+                ["type_name"] = declaringType,
+                ["accessibility"] = "all",
+            });
+
+            var resultLines = FindMethodsResultLines(text);
+            Assert.NotEmpty(resultLines);
+            Assert.All(resultLines, line => Assert.StartsWith($"{declaringType}.", line));
+        }
+    }
+
+    [Fact]
+    public async Task FindMethods_WithAnArgumentListPattern_ComparesTheArguments()
+    {
+        // A parameter type written as ILens prints it must find the method it came from, a
+        // different argument must not, and the unbound form matches any arguments.
+        var method = MethodWithOneConstructedGenericParameter();
+        var parameterType = method.GetParameters()[0].ParameterType;
+        string genericName = parameterType.Name.Split('`')[0];
+        var arguments = parameterType.GetGenericArguments();
+
+        async Task<string> FindWith(string pattern) => await CallToolText("find_methods", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["name_contains"] = method.Name,
+            ["parameter_types"] = new[] { pattern },
+            ["accessibility"] = "all",
+        });
+
+        Assert.Contains($".{method.Name}(", await FindWith(RenderTypeReference(parameterType)));
+        Assert.Contains($".{method.Name}(",
+            await FindWith($"{genericName}<{new string(',', arguments.Length - 1)}>"));
+        Assert.DoesNotContain($".{method.Name}(", await FindWith(
+            $"{genericName}<{string.Join(", ", arguments.Select(_ => "ThisTypeDoesNotExist"))}>"));
+    }
+
+    [Fact]
+    public async Task FindMethods_WithAParameterTypeNestedInAGenericType_FindsItAsPrinted()
+    {
+        // A type nested in a generic type takes that type's arguments, as
+        // Dictionary<TKey, TValue>.Entry does. ILens writes each argument on the segment that
+        // declares it, as C# does, and the printed type finds the method it came from.
+        var method = MethodWithOneParameterNestedInAGenericType();
+        string printed = RenderTypeReference(method.GetParameters()[0].ParameterType);
+
+        async Task<string> FindMethods(Dictionary<string, object?> filters) =>
+            await CallToolText("find_methods", new(filters)
+            {
+                ["assembly"] = _server.AssemblyPath,
+                ["type_name"] = UnboundName(method.DeclaringType!),
+                ["name_contains"] = method.Name,
+                ["accessibility"] = "all",
+            });
+
+        string listing = await FindMethods(new());
+        Assert.Contains($".{method.Name}({printed})", listing);
+        string line = listing.Split('\n').First(l => l.Contains($".{method.Name}({printed})"));
+
+        string found = await FindMethods(new() { ["parameter_types"] = new[] { printed } });
+        Assert.Contains(line, found.Split('\n'));
+    }
+
+    [Fact]
+    public async Task FindMethods_WithAFullyQualifiedPatternOfATypeFromAnotherAssembly_FindsTheMethod()
+    {
+        // ILens reads an assembly without the ones it references, so a generic type from
+        // another assembly, such as ImmutableArray<T>, is known only by the reference to it,
+        // and in code with nullable annotations a reference type also carries its annotation.
+        // Its full name states the arity all the same, in each of the three forms.
+        foreach (var method in MethodsWithOneImmutableCollectionParameter())
+        {
+            var parameterType = method.GetParameters()[0].ParameterType;
+            string fullName = parameterType.GetGenericTypeDefinition().FullName!.Split('`')[0];
+            var arguments = parameterType.GetGenericArguments();
+
+            foreach (string pattern in new[]
+            {
+                $"{fullName}<{string.Join(", ", arguments.Select(RenderTypeReference))}>",
+                $"{fullName}<{new string(',', arguments.Length - 1)}>",
+                $"{fullName}`{arguments.Length}",
+            })
+            {
+                string text = await CallToolText("find_methods", new()
+                {
+                    ["assembly"] = _server.AssemblyPath,
+                    ["type_name"] = method.DeclaringType!.FullName,
+                    ["name_contains"] = method.Name,
+                    ["parameter_types"] = new[] { pattern },
+                    ["accessibility"] = "all",
+                });
+                Assert.Contains($".{method.Name}(", text);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Analyze_ImplementedBy_OnInterfacesSharingAName_KeepsTheirImplementersApart()
+    {
+        // Like IComparable and IComparable<T>, the interfaces share a name apart from their
+        // arity, and implementing one of them is not implementing the others.
+        var sameName = SharedNameGroups().FirstOrDefault(g => g.Count(t => t.IsInterface) > 1)
+            ?? throw new InvalidOperationException(
+                "No name shared by several interfaces found in ICSharpCode.Decompiler.dll — " +
+                "the test target's API drifted; pick a different assembly or test shape.");
+        var interfaces = sameName.Where(t => t.IsInterface).ToArray();
+        static bool Implements(Type type, Type iface) => type.GetInterfaces()
+            .Any(i => (i.IsGenericType ? i.GetGenericTypeDefinition() : i) == iface);
+        // The types of that name, and every type implementing one of the interfaces.
+        var candidates = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly.GetTypes()
+            .Where(t => !t.IsNested && !t.Name.StartsWith('<')
+                && (sameName.Contains(t) || interfaces.Any(i => Implements(t, i))))
+            .ToList();
+
+        int implementersChecked = 0;
+        foreach (var iface in interfaces)
+        {
+            string text = await CallToolText("analyze", new()
+            {
+                ["assembly"] = _server.AssemblyPath,
+                ["type_name"] = UnboundName(iface),
+                ["kind"] = "implemented_by",
+                ["limit"] = 10_000,
+            });
+
+            var listed = ResultBody(text).Split('\n');
+            // The candidates include the interface itself, which does not implement itself.
+            foreach (var type in candidates)
+            {
+                bool implements = Implements(type, iface);
+                bool isListed = listed.Contains(UnboundName(type));
+                Assert.True(isListed == implements, $"{UnboundName(type)} is {(isListed ? "" : "not ")}" +
+                    $"listed among the implementers of {UnboundName(iface)}.");
+                if (implements)
+                    implementersChecked++;
+            }
+        }
+        Assert.True(implementersChecked > 0, "Found no implementer of the interfaces to check.");
+    }
+
+    [Fact]
+    public async Task FindMethods_OnATupleTypedParameter_PrintsAndMatchesItsElementTypes()
+    {
+        // CoreLib defines System.ValueTuple, so ILSpy reads a tuple in its signatures as a tuple
+        // type, where in an assembly that only references ValueTuple it stays a constructed
+        // ValueTuple<...>. Both print alike, with the element types, and the printed type finds
+        // the method again.
+        var method = CoreLibMethodWithOneParameter("tuple-typed", IsOrContainsTuple);
+        string printed = RenderTypeReference(method.GetParameters()[0].ParameterType);
+
+        Assert.Contains($".{method.Name}({printed})", await FindCoreLibMethods(method, new()));
+        Assert.Contains($".{method.Name}(",
+            await FindCoreLibMethods(method, new() { ["parameter_types"] = new[] { printed } }));
+    }
+
+    [Fact]
+    public async Task FindMethods_OnAFunctionPointerParameter_PrintsAndMatchesItsSignature()
+    {
+        // A function pointer's type is its signature, so it prints as C# writes it.
+        var method = CoreLibMethodWithOneParameter("function-pointer", type => type.IsFunctionPointer
+            && !type.GetFunctionPointerParameterTypes().Append(type.GetFunctionPointerReturnType()).Any(t => t.IsByRef));
+        string printed = RenderFunctionPointer(method.GetParameters()[0]);
+
+        Assert.Contains($".{method.Name}({printed})", await FindCoreLibMethods(method, new()));
+        Assert.Contains($".{method.Name}(",
+            await FindCoreLibMethods(method, new() { ["parameter_types"] = new[] { printed } }));
+    }
+
+    [Fact]
+    public async Task FindMethods_OnAPointerParameter_PrintsAndMatchesItWithTheKeyword()
+    {
+        var method = CoreLibMethodWithOneParameter("void*", type => type.IsPointer && type.GetElementType() == typeof(void));
+
+        Assert.Contains($".{method.Name}(void*)", await FindCoreLibMethods(method, new()));
+        Assert.Contains($".{method.Name}(",
+            await FindCoreLibMethods(method, new() { ["parameter_types"] = new[] { "void*" } }));
+    }
+
+    [Theory]
+    [InlineData(typeof(IntPtr), "nint", "nint")]
+    [InlineData(typeof(IntPtr), "nint", "IntPtr")]
+    [InlineData(typeof(IntPtr), "nint", "System.IntPtr")]
+    [InlineData(typeof(UIntPtr), "nuint", "nuint")]
+    [InlineData(typeof(UIntPtr), "nuint", "UIntPtr")]
+    [InlineData(typeof(UIntPtr), "nuint", "System.UIntPtr")]
+    public async Task FindMethods_OnANativeIntegerParameter_PrintsTheKeywordAndMatchesEveryName(
+        Type type, string keyword, string pattern)
+    {
+        // C# 11 made nint and nuint the keywords for System.IntPtr and System.UIntPtr. ILSpy
+        // reads either as a type named after the keyword, and the .NET names find it all the same.
+        var method = CoreLibMethodWithOneParameter(keyword, parameterType => parameterType == type);
+
+        Assert.Contains($".{method.Name}({keyword})",
+            await FindCoreLibMethods(method, new() { ["parameter_types"] = new[] { pattern } }));
+    }
+
+    [Fact]
+    public async Task DecompileMethod_OnAnIndexerAccessorWithAHint_ResolvesTheIndexerItNames()
+    {
+        // Every indexer's getter is get_Item and every setter set_Item, so the hint tells them
+        // apart as it tells any overloads apart. A setter takes the value after the indices.
+        var (type, indexers) = CoreLibTypeWithTwoIndexers();
+        foreach (var indexer in indexers)
+        {
+            string[] indices = indexer.GetIndexParameters().Select(p => RenderTypeReference(p.ParameterType)).ToArray();
+            string getter = $"// {type.FullName}.get_Item({string.Join(", ", indices)}) → ";
+            Assert.StartsWith(getter, await DecompileCoreLibMethod(type, "get_Item", new() { ["parameter_types"] = indices }));
+            Assert.StartsWith(getter, await DecompileCoreLibMethod(type, "get_Item", new() { ["parameter_count"] = indices.Length }));
+
+            string[] setterParameters = [.. indices, RenderTypeReference(indexer.PropertyType)];
+            Assert.StartsWith($"// {type.FullName}.set_Item({string.Join(", ", setterParameters)}) → ",
+                await DecompileCoreLibMethod(type, "set_Item", new() { ["parameter_types"] = setterParameters }));
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("ThisTypeDoesNotExist")]
+    public async Task DecompileMethod_OnAnIndexerAccessorWithoutAMatchingHint_ListsEveryIndexer(string? parameterType)
+    {
+        // Without a hint, or with one no indexer satisfies, the answer names every getter
+        // rather than returning whichever indexer comes first.
+        var (type, indexers) = CoreLibTypeWithTwoIndexers();
+        var arguments = new Dictionary<string, object?>
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = type.FullName!,
+            ["member_name"] = "get_Item",
+        };
+        if (parameterType is not null)
+            arguments["parameter_types"] = new[] { parameterType };
+
+        var (result, text) = await CallToolExpectingError("decompile", arguments);
+
+        Assert.True(result.IsError, $"Expected an error naming every indexer, got: {text}");
+        foreach (var indexer in indexers)
+        {
+            string indices = string.Join(", ", indexer.GetIndexParameters().Select(p => RenderTypeReference(p.ParameterType)));
+            Assert.Contains($"{type.FullName}.get_Item({indices})", text);
+        }
+    }
+
+    [Fact]
+    public async Task FindCallSites_OnAnIndexerGetterWithoutAHint_CoversEveryIndexer()
+    {
+        var (type, indexers) = CoreLibTypeWithTwoIndexers();
+
+        string text = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = type.FullName!,
+            ["member_name"] = "get_Item",
+            ["kind"] = "call_sites",
+        });
+
+        Assert.Contains($"{type.FullName}.get_Item ({indexers.Length} overloads)", text.Split('\n')[0]);
+    }
+
+    [Fact]
+    public async Task ListMembers_OnATypeWithSeveralIndexers_ListsEachWithItsIndices()
+    {
+        // Every indexer of a type shares one name, so only the indices tell them apart, both in
+        // which members are listed and in how each is printed.
+        var (type, indexers) = CoreLibTypeWithTwoIndexers();
+
+        string text = await CallToolText("list_members", new()
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = type.FullName!,
+            ["kinds"] = new[] { "property" },
+            ["name_contains"] = indexers[0].Name,
+        });
+
+        Assert.Equal(indexers.Length, text.Split('\n').Count(line => line.Contains($" {indexers[0].Name}[")));
+        foreach (var indexer in indexers)
+        {
+            string indices = string.Join(", ", indexer.GetIndexParameters().Select(p => $"{RenderTypeReference(p.ParameterType)} {p.Name}"));
+            Assert.Contains($" {RenderTypeReference(indexer.PropertyType)} {indexer.Name}[{indices}] {{ get; set; }}", text);
+        }
+    }
+
+    [Fact]
+    public async Task ListMembers_OnAVolatileFieldOfAGenericType_PrintsItsTypeArguments()
+    {
+        // The compiler marks a volatile field's type with a required modifier, which ILSpy reads
+        // as a type wrapped around the field's type. The wrapped type keeps its arguments.
+        var (type, field) = CoreLibVolatileFieldOfAGenericType();
+
+        string text = await CallToolText("list_members", new()
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = UnboundName(type),
+            ["kinds"] = new[] { "field" },
+            ["accessibility"] = "all",
+        });
+
+        string line = text.Split('\n').Single(l => l.EndsWith($" {field.Name}"));
+        Assert.Contains($" {RenderTypeReference(field.FieldType)} ", line);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ListMembers_WithInherited_MarksWhereEachMemberIsDeclaredAndListsAnOverrideOnce(bool genericBase)
+    {
+        // An inherited member carries the base class that declares it, and the type's own
+        // members carry nothing. An override hides the declaration it overrides, also on a
+        // generic base, which declares the method in its type parameters where the override
+        // takes the type arguments the class gives them.
+        var (type, own, overrides, inherited) = ClassWithInheritedMembers(genericBase);
+
+        string text = await CallToolText("list_members", new()
+        {
+            ["assembly"] = type.Assembly == typeof(object).Assembly ? _server.CoreLibPath : _server.AssemblyPath,
+            ["type_name"] = type.FullName!,
+            ["accessibility"] = "all",
+            ["include_inherited"] = true,
+            ["limit"] = 10000,
+        });
+
+        // A member's name follows a space and precedes its parameters, its accessors, a
+        // constant's value, the origin mark or the end of the line.
+        var lines = text.Split('\n');
+        string LineOf(MemberInfo member)
+        {
+            string name = " " + member.Name;
+            var matching = lines.Where(line => line.EndsWith(name, StringComparison.Ordinal)
+                || new[] { "(", " {", " = ", "  [from " }.Any(next => line.Contains(name + next))).ToArray();
+            Assert.True(matching.Length == 1,
+                $"Expected one line for {member.DeclaringType}.{member.Name}, found {matching.Length}:\n{string.Join("\n", matching)}");
+            return matching[0];
+        }
+        foreach (var member in own.Concat(overrides))
+            Assert.DoesNotContain("[from ", LineOf(member));
+        foreach (var member in inherited)
+            Assert.EndsWith($"  [from {UnboundName(member.DeclaringType!)}]", LineOf(member));
+    }
+
+    /// <summary>
+    /// find_methods on CoreLib for the methods named like <paramref name="method"/> on its
+    /// declaring type, with <paramref name="filters"/> added.
+    /// </summary>
+    private Task<string> FindCoreLibMethods(MethodInfo method, Dictionary<string, object?> filters) =>
+        CallToolText("find_methods", new(filters)
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = method.DeclaringType!.FullName,
+            ["name_contains"] = method.Name,
+            ["accessibility"] = "all",
+        });
+
+    /// <summary>
+    /// decompile on CoreLib for <paramref name="methodName"/> on <paramref name="type"/>,
+    /// with the overload hint in <paramref name="hint"/>.
+    /// </summary>
+    /// <summary>
+    /// The method lines of a find_methods answer, without the header, the truncation line or
+    /// the static modifier, so each starts with the method's declaring type.
+    /// </summary>
+    [Fact]
+    public async Task FindMethods_CutByLimit_CountsEveryMethodAndNamesHowManyAreNotShown()
+    {
+        var type = TypeWithSeveralPlainMethods();
+        var arguments = new Dictionary<string, object?>
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["type_name"] = type.FullName!,
+            ["accessibility"] = "all",
+        };
+        string all = await CallToolText("find_methods", arguments);
+        int total = FindMethodsResultLines(all).Count;
+        Assert.True(total > 1, $"Expected several methods on {type.FullName}, got: {all}");
+
+        string cut = await CallToolText("find_methods", new(arguments) { ["limit"] = 1 });
+
+        var lines = cut.Split('\n');
+        Assert.Equal(3, lines.Length);
+        Assert.Equal($"{total} methods:", lines[0]);
+        Assert.Equal($"... ({total - 1} more; raise limit to see all)", lines[2]);
+    }
+
+    private static List<string> FindMethodsResultLines(string text) =>
+        text.Split('\n')
+            .Skip(1)
+            .Where(line => !line.StartsWith("... ("))
+            .Select(line => line.StartsWith("static ") ? line["static ".Length..] : line)
+            .ToList();
+
+    private Task<string> DecompileCoreLibMethod(Type type, string methodName, Dictionary<string, object?> hint) =>
+        CallToolText("decompile", new(hint)
+        {
+            ["assembly"] = _server.CoreLibPath,
+            ["type_name"] = type.FullName!,
+            ["member_name"] = methodName,
+        });
+
+    /// <summary>
+    /// A top-level, non-generic type in CoreLib with two public read-write indexers that take
+    /// different numbers of indices, and those indexers, fewest indices first.
+    /// </summary>
+    private static (Type Type, PropertyInfo[] Indexers) CoreLibTypeWithTwoIndexers()
+    {
+        foreach (var type in typeof(object).Assembly.GetExportedTypes().Where(t => !t.IsGenericType && !t.IsNested))
+        {
+            var indexers = type.GetProperties(PublicDeclared)
+                .Where(p => p.GetIndexParameters().Length > 0
+                    && p.GetMethod is { IsPublic: true } && p.SetMethod is { IsPublic: true })
+                .OrderBy(p => p.GetIndexParameters().Length)
+                .ToArray();
+            if (indexers.Length == 2
+                && indexers[0].GetIndexParameters().Length != indexers[1].GetIndexParameters().Length)
+                return (type, indexers);
+        }
+        throw new InvalidOperationException(
+            "No type with two public read-write indexers of different arity found in System.Private.CoreLib — " +
+            "the runtime's API drifted; pick a different assembly or test shape.");
+    }
+
+    /// <summary>
+    /// A method in CoreLib, declared on a top-level, non-generic type and not generic itself, with
+    /// one parameter, not passed by reference, whose type <paramref name="parameterType"/> accepts.
+    /// </summary>
+    private static MethodInfo CoreLibMethodWithOneParameter(string shape, Func<Type, bool> parameterType) =>
+        typeof(object).Assembly.GetTypes()
+            .Where(t => !t.IsGenericType && !t.IsNested && !t.Name.StartsWith('<'))
+            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic
+                | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+            .FirstOrDefault(m => !m.IsSpecialName && !m.IsGenericMethod && !m.Name.StartsWith('<')
+                && m.GetParameters() is [{ ParameterType: { IsByRef: false } p }] && parameterType(p))
+            ?? throw new InvalidOperationException(
+                $"No method with one {shape} parameter found in System.Private.CoreLib — " +
+                "the runtime's API drifted; pick a different assembly or test shape.");
+
+    /// <summary>A System.ValueTuple type, or a type built from one, such as a list of pairs.</summary>
+    private static bool IsOrContainsTuple(Type type) =>
+        type.HasElementType
+            ? IsOrContainsTuple(type.GetElementType()!)
+            : type.IsConstructedGenericType
+              && (type.GetGenericTypeDefinition().FullName!.StartsWith("System.ValueTuple`", StringComparison.Ordinal)
+                  || type.GetGenericArguments().Any(IsOrContainsTuple));
+
+    /// <summary>
+    /// A volatile field in CoreLib whose type is generic, declared on a top-level generic type.
+    /// </summary>
+    private static (Type Type, FieldInfo Field) CoreLibVolatileFieldOfAGenericType()
+    {
+        const BindingFlags declared = BindingFlags.Public | BindingFlags.NonPublic
+            | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+        foreach (var type in typeof(object).Assembly.GetTypes()
+                     .Where(t => t.IsGenericTypeDefinition && !t.IsNested && !t.Name.StartsWith('<')))
+        {
+            var field = type.GetFields(declared).FirstOrDefault(f => f.FieldType.IsGenericType
+                && f.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.CompilerServices.IsVolatile)));
+            if (field != null)
+                return (type, field);
+        }
+        throw new InvalidOperationException(
+            "No volatile field of a generic type found in System.Private.CoreLib — " +
+            "the runtime's API drifted; pick a different assembly or test shape.");
+    }
+
+    /// <summary>
+    /// A function pointer the way ILens prints it, as C# writes it, parameter types first and the
+    /// return type last: <c>delegate* unmanaged[Cdecl]&lt;int, void&gt;</c>.
+    /// </summary>
+    private static string RenderFunctionPointer(ParameterInfo parameter)
+    {
+        var type = parameter.ParameterType;
+        var conventions = parameter.GetModifiedParameterType().GetFunctionPointerCallingConventions()
+            .Select(convention => convention.Name["CallConv".Length..])
+            .ToList();
+        string callingConvention = !type.IsUnmanagedFunctionPointer ? ""
+            : conventions.Count == 0 ? " unmanaged"
+            : $" unmanaged[{string.Join(", ", conventions)}]";
+        var components = type.GetFunctionPointerParameterTypes().Append(type.GetFunctionPointerReturnType());
+        return $"delegate*{callingConvention}<{string.Join(", ", components.Select(RenderTypeReference))}>";
+    }
+
+    /// <summary>
+    /// The name of the type a list_members answer is about, as its header's declaration writes
+    /// it: the word before the base types, or before the colon when there are none.
+    /// </summary>
+    private static string DeclaredTypeName(string listMembersOutput)
+    {
+        string header = listMembersOutput.Split('\n')[0].TrimEnd(':');
+        string declaration = header[(header.IndexOf(" of ", StringComparison.Ordinal) + 4)..];
+        int bases = declaration.IndexOf(" : ", StringComparison.Ordinal);
+        if (bases >= 0)
+            declaration = declaration[..bases];
+        return declaration[(declaration.LastIndexOf(' ') + 1)..];
+    }
+
+    private Task<string> ListAllMembers(string typeName) => CallToolText("list_members", new()
+    {
+        ["assembly"] = _server.AssemblyPath,
+        ["type_name"] = typeName,
+        ["accessibility"] = "all",
+    });
 
     /// <summary>
     /// An arity no discovered test method will have, so a hint built from it is
@@ -1113,10 +2072,187 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     }
 
     /// <summary>
-    /// Find the TASK-24 shape in the test target: a type that declares a method whose name
+    /// Find a public nested type in the test target that declares a plain public method, so
+    /// both a member listing and a declaring-type filter have something to return.
+    /// </summary>
+    private static Type NestedTypeWithMethods()
+    {
+        var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
+        return assembly.GetExportedTypes()
+            .Where(IsPlainNestedType)
+            .FirstOrDefault(t => t.GetMethods(PublicDeclared).Any(m => !m.IsSpecialName))
+            ?? throw new InvalidOperationException(
+                "No public nested type with a plain public method found in ICSharpCode.Decompiler.dll — " +
+                "the test target's API drifted; pick a different assembly or test shape.");
+    }
+
+    /// <summary>
+    /// Find a public method in the test target whose return type is a public nested type of
+    /// the same assembly, so a return-type pattern can name it.
+    /// </summary>
+    private static MethodInfo MethodReturningANestedType()
+    {
+        var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
+        return assembly.GetExportedTypes()
+            .Where(t => !t.IsGenericType)
+            .SelectMany(t => t.GetMethods(PublicDeclared))
+            .FirstOrDefault(m => !m.IsSpecialName && !m.IsGenericMethod
+                && m.ReturnType.Assembly == assembly && IsPlainNestedType(m.ReturnType))
+            ?? throw new InvalidOperationException(
+                "No public method returning a public nested type found in ICSharpCode.Decompiler.dll — " +
+                "the test target's API drifted; pick a different assembly or test shape.");
+    }
+
+    /// <summary>
+    /// A type nested one level deep in a non-generic type and not generic itself, so its
+    /// reflection name differs from its dotted name only in the '+'.
+    /// </summary>
+    private static bool IsPlainNestedType(Type type) =>
+        type.IsNested && !type.IsGenericType
+        && type.DeclaringType is { IsGenericType: false, IsNested: false };
+
+    /// <summary>
+    /// Groups of top-level types in the test target that share a name apart from their
+    /// generic arity, each ordered by arity, longest name first so a substring search on it
+    /// stays short. Discovered rather than hardcoded so the tests survive upstream API drift.
+    /// </summary>
+    private static List<Type[]> SharedNameGroups()
+    {
+        var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
+        var groups = assembly.GetTypes()
+            .Where(t => !t.IsNested && !t.Name.StartsWith('<'))
+            .GroupBy(t => t.FullName!.Split('`')[0])
+            .Where(g => g.Count() > 1)
+            .OrderByDescending(g => g.Key.Length)
+            .Select(g => g.OrderBy(t => t.GetGenericArguments().Length).ToArray())
+            .ToList();
+        return groups.Count > 0 ? groups : throw new InvalidOperationException(
+            "No types sharing a name apart from their arity found in ICSharpCode.Decompiler.dll — " +
+            "the test target's API drifted; pick a different assembly or test shape.");
+    }
+
+    /// <summary>
+    /// A non-generic type and a generic type of the same name, both declaring a method of
+    /// their own, so a member listing and a declaring-type filter have something to show.
+    /// </summary>
+    private static (Type Plain, Type Generic) NonGenericTypeWithAGenericNamesake()
+    {
+        const BindingFlags declared = BindingFlags.Public | BindingFlags.NonPublic
+            | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+        static bool DeclaresAMethod(Type t) => t.GetMethods(declared).Any(m => !m.IsSpecialName);
+
+        var group = SharedNameGroups().FirstOrDefault(g =>
+                !g[0].IsGenericTypeDefinition && DeclaresAMethod(g[0]) && DeclaresAMethod(g[1]))
+            ?? throw new InvalidOperationException(
+                "No non-generic type with a generic namesake found in ICSharpCode.Decompiler.dll — " +
+                "the test target's API drifted; pick a different assembly or test shape.");
+        return (group[0], group[1]);
+    }
+
+    /// <summary>
+    /// Find a method in the test target whose one parameter is a constructed generic type,
+    /// preferring one whose arguments are generic themselves, the shape of the
+    /// <c>List&lt;ValueTuple&lt;ILInstruction, KnownTypeCode&gt;&gt;</c> parameters ILens prints.
+    /// </summary>
+    private static MethodInfo MethodWithOneConstructedGenericParameter()
+    {
+        var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
+        var candidates = assembly.GetTypes()
+            .Where(t => !t.IsGenericType && !t.Name.StartsWith('<'))
+            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic
+                | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+            .Where(m => !m.IsSpecialName && !m.IsGenericMethod && !m.Name.StartsWith('<')
+                && m.GetParameters() is [{ ParameterType: { IsConstructedGenericType: true } p }]
+                && !p.ContainsGenericParameters)
+            .ToList();
+        return candidates.FirstOrDefault(m => m.GetParameters()[0].ParameterType
+                   .GetGenericArguments().Any(a => a.IsConstructedGenericType))
+            ?? candidates.FirstOrDefault()
+            ?? throw new InvalidOperationException(
+                "No method with a constructed generic parameter found in ICSharpCode.Decompiler.dll — " +
+                "the test target's API drifted; pick a different assembly or test shape.");
+    }
+
+    /// <summary>
+    /// A method in the test target with one parameter, whose type is nested in a top-level
+    /// generic type and declares no type parameters of its own, the shape of
+    /// <c>Dictionary&lt;TKey, TValue&gt;.Entry</c>.
+    /// </summary>
+    private static MethodInfo MethodWithOneParameterNestedInAGenericType()
+    {
+        var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
+        return assembly.GetTypes()
+            .Where(t => !t.IsNested && !t.Name.StartsWith('<'))
+            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic
+                | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+            .FirstOrDefault(m => !m.IsSpecialName && !m.IsGenericMethod && !m.Name.StartsWith('<')
+                && m.GetParameters() is [{ ParameterType: { IsNested: true } p }]
+                && p.DeclaringType is { IsGenericType: true, IsNested: false } enclosing
+                && p.GetGenericArguments().Length == enclosing.GetGenericArguments().Length)
+            ?? throw new InvalidOperationException(
+                "No method with a parameter nested in a generic type found in ICSharpCode.Decompiler.dll — " +
+                "the test target's API drifted; pick a different assembly or test shape.");
+    }
+
+    /// <summary>
+    /// Two methods in the test target with one parameter each, a constructed type from
+    /// System.Collections.Immutable, an assembly the test target references: one a value
+    /// type, the other a reference type with a nullable annotation.
+    /// </summary>
+    private static MethodInfo[] MethodsWithOneImmutableCollectionParameter()
+    {
+        var assembly = typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly;
+        var candidates = assembly.GetTypes()
+            .Where(t => !t.IsGenericType && !t.Name.StartsWith('<'))
+            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic
+                | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+            .Where(m => !m.IsSpecialName && !m.IsGenericMethod && !m.Name.StartsWith('<')
+                && m.GetParameters() is [{ ParameterType: { IsConstructedGenericType: true, IsNested: false } p }]
+                && p.Namespace == "System.Collections.Immutable"
+                && !p.ContainsGenericParameters)
+            .ToList();
+        var nullability = new NullabilityInfoContext();
+        var valueType = candidates.FirstOrDefault(m => m.GetParameters()[0].ParameterType.IsValueType);
+        var annotated = candidates.FirstOrDefault(m => !m.GetParameters()[0].ParameterType.IsValueType
+            && nullability.Create(m.GetParameters()[0]).ReadState != NullabilityState.Unknown);
+        return valueType != null && annotated != null ? [valueType, annotated] : throw new InvalidOperationException(
+            "No value-type and annotated reference-type System.Collections.Immutable parameters found in " +
+            "ICSharpCode.Decompiler.dll — the test target's API drifted; pick a different assembly or test shape.");
+    }
+
+    /// <summary>A generic type definition's name as ILens prints it, e.g. <c>System.Func&lt;,&gt;</c>.</summary>
+    private static string UnboundName(Type type)
+    {
+        int arity = type.GetGenericArguments().Length;
+        string name = type.FullName!.Split('`')[0];
+        return arity == 0 ? name : $"{name}<{new string(',', arity - 1)}>";
+    }
+
+    /// <summary>
+    /// A type reference the way ILens prints parameter types: short names, C# keywords for
+    /// the framework primitives, generic arguments spelled out, pointers marked with '*', and a
+    /// type nested in a top-level generic type, without type parameters of its own, written
+    /// with that type: <c>Dictionary&lt;TKey, TValue&gt;.Entry</c>.
+    /// </summary>
+    private static string RenderTypeReference(Type type)
+    {
+        if (type.IsPointer)
+            return RenderTypeReference(type.GetElementType()!) + "*";
+        if (type.IsArray)
+            return RenderTypeReference(type.GetElementType()!) + "[]";
+        if (!type.IsGenericType)
+            return type.Namespace == "System" && CSharpKeyword(type.Name) is { } keyword ? keyword : type.Name;
+        string arguments = string.Join(", ", type.GetGenericArguments().Select(RenderTypeReference));
+        return type.IsNested && type.DeclaringType!.IsGenericType
+            ? $"{type.DeclaringType.Name.Split('`')[0]}<{arguments}>.{type.Name}"
+            : $"{type.Name.Split('`')[0]}<{arguments}>";
+    }
+
+    /// <summary>
+    /// Find, in the test target, a type that declares a method whose name
     /// also has a <em>different</em> overload declared only on a base type in the same
     /// assembly (so the base overload is decompilable), and whose parameter types are simple
-    /// enough to express as a decompile_method hint. Returns the derived type, the shared
+    /// enough to express as a decompile hint. Returns the derived type, the shared
     /// method name, and the base-only overload. Discovered rather than hardcoded so the test
     /// survives upstream API drift.
     /// </summary>
@@ -1139,7 +2275,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
                  baseType != null && baseType != typeof(object);
                  baseType = baseType.BaseType)
             {
-                // The base overload must live in the same DLL, else decompile_method can't reach it.
+                // The base overload must live in the same DLL, else decompile can't reach it.
                 if (baseType.Assembly != assembly || baseType.IsNested || baseType.IsGenericType)
                     continue;
 
@@ -1148,18 +2284,18 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
                                          && m.GetParameters().Length > 0
                                          && m.GetParameters().All(p => IsSimpleParameterType(p.ParameterType))))
                 {
-                    // The derived type must declare the *name* — that is the short-circuit
-                    // trigger the fix removed.
+                    // The derived type must declare the *name*, so resolution has to walk past
+                    // a level that has it.
                     var siblings = declaredByName[baseMethod.Name].ToList();
                     if (siblings.Count == 0)
                         continue;
 
                     // Require every derived overload of this name to differ in arity from the
-                    // base overload. decompile_method narrows by exact parameter count first, so
+                    // base overload. decompile narrows by exact parameter count first, so
                     // a differing arity guarantees the hint cannot match a derived overload and
                     // resolution must walk to the base — it also implies the base signature isn't
-                    // redeclared. This tests an arity-differentiated variant of the TASK-24 shape
-                    // rather than the literal same-arity repro, which keeps the discovered target
+                    // redeclared. This tests an arity-differentiated variant of the shape rather
+                    // than a same-arity one, which keeps the discovered target
                     // robust: a same-arity derived overload could share a parameter's short name
                     // with the base and match the loose hint, resolving to the wrong level.
                     var baseArity = baseMethod.GetParameters().Length;
@@ -1174,6 +2310,83 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         throw new InvalidOperationException(
             "No type declaring a method whose different-signature overload is base-only was found " +
             "in ICSharpCode.Decompiler.dll — the test target's API drifted; pick a different shape.");
+    }
+
+    /// <summary>
+    /// A top-level, non-generic class, with the members of it and of its base classes in its own
+    /// assembly short of System.Object, the chain list_members walks, that a line names
+    /// unambiguously: each is the only ordinary member of its name in the chain, apart from a
+    /// method override and the base declaration it overrides. The class has own members,
+    /// overrides and inherited members. With <paramref name="genericBase"/>, its base class is
+    /// generic and an override takes one of that class's type parameters; otherwise no class in
+    /// the chain is generic, and the class inherits members of every kind. The test target is
+    /// searched first, then CoreLib: no class in the test target inherits an event from a class
+    /// in it.
+    /// </summary>
+    private static (Type Type, MemberInfo[] Own, MethodInfo[] Overrides, MemberInfo[] Inherited)
+        ClassWithInheritedMembers(bool genericBase)
+    {
+        var assemblies = new[] { typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler).Assembly, typeof(object).Assembly };
+        foreach (var type in assemblies.SelectMany(a => a.GetTypes()).Where(t => t.IsClass && !t.IsNested && !t.IsGenericType))
+        {
+            var baseTypes = new List<Type>();
+            for (var baseType = type.BaseType;
+                 baseType != null && baseType != typeof(object) && baseType.Assembly == type.Assembly;
+                 baseType = baseType.BaseType)
+                baseTypes.Add(baseType.IsGenericType ? baseType.GetGenericTypeDefinition() : baseType);
+            if (baseTypes.Count == 0 || baseTypes.Any(b => b.IsNested)
+                || (genericBase ? !baseTypes[0].IsGenericTypeDefinition : baseTypes.Any(b => b.IsGenericTypeDefinition)))
+                continue;
+
+            var named = baseTypes.Prepend(type).SelectMany(OrdinaryMembers).ToLookup(m => m.Name);
+            var own = OrdinaryMembers(type).Where(m => named[m.Name].Count() == 1).ToArray();
+            var overrides = OrdinaryMembers(type).OfType<MethodInfo>()
+                .Where(m => named[m.Name].Count() == 2 && baseTypes.Contains(BaseDeclaration(m).DeclaringType))
+                .ToArray();
+            var inherited = baseTypes.SelectMany(OrdinaryMembers).Where(m => named[m.Name].Count() == 1).ToArray();
+
+            bool shaped = genericBase
+                ? inherited.Length > 0 && overrides.Any(m =>
+                    BaseDeclaration(m).GetParameters().Any(p => p.ParameterType.ContainsGenericParameters))
+                : new[] { MemberTypes.Method, MemberTypes.Property, MemberTypes.Field, MemberTypes.Event }
+                    .All(kind => inherited.Any(m => m.MemberType == kind));
+            if (own.Length > 0 && overrides.Length > 0 && shaped)
+                return (type, own, overrides, inherited);
+        }
+
+        throw new InvalidOperationException(
+            $"No class with a {(genericBase ? "generic" : "non-generic")} base class it overrides and " +
+            "inherits members from was found in ICSharpCode.Decompiler.dll or System.Private.CoreLib — " +
+            "their API drifted; pick a different shape.");
+    }
+
+    /// <summary>
+    /// The members <paramref name="type"/> declares that list_members prints on a line a test
+    /// can find by name: no accessor or operator, no generic method, whose type parameters follow
+    /// its name, no indexer, no compiler-generated member and no explicit interface implementation.
+    /// </summary>
+    private static IEnumerable<MemberInfo> OrdinaryMembers(Type type)
+    {
+        const BindingFlags declared = BindingFlags.Public | BindingFlags.NonPublic
+            | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+        MemberInfo[] members =
+        [
+            .. type.GetMethods(declared).Where(m => !m.IsSpecialName && !m.IsGenericMethodDefinition),
+            .. type.GetProperties(declared).Where(p => p.GetIndexParameters().Length == 0),
+            .. type.GetFields(declared),
+            .. type.GetEvents(declared),
+        ];
+        return members.Where(m => !m.Name.StartsWith('<') && !m.Name.Contains('.'));
+    }
+
+    /// <summary>
+    /// The declaration <paramref name="method"/> overrides, as its class declares it, which on a
+    /// generic class is in the class's type parameters. The method itself if it overrides nothing.
+    /// </summary>
+    private static MethodInfo BaseDeclaration(MethodInfo method)
+    {
+        var root = method.GetBaseDefinition();
+        return (MethodInfo)root.Module.ResolveMethod(root.MetadataToken)!;
     }
 
     /// <summary>
@@ -1204,31 +2417,31 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     }
 
     /// <summary>
-    /// The result lines of an <c>analyze</c> response, with its header line dropped. Lets
-    /// two routes to the same cross-references be compared without the headers — which name
-    /// the symbol asked about, and so differ by construction — forcing a mismatch.
+    /// The result lines of an <c>analyze</c> response, with its header line dropped, and empty
+    /// for an empty answer, which is the header line alone. Lets two routes to the same
+    /// cross-references be compared without the headers — which name the symbol asked about,
+    /// and so differ by construction — forcing a mismatch.
     /// </summary>
     private static string ResultBody(string analyzeOutput)
     {
         int firstBreak = analyzeOutput.IndexOf('\n');
-        Assert.True(firstBreak >= 0,
-            $"Expected an analyze header line followed by results, got: {analyzeOutput}");
-        return analyzeOutput[(firstBreak + 1)..];
+        return firstBreak < 0 ? "" : analyzeOutput[(firstBreak + 1)..];
     }
 
     /// <summary>
-    /// Reflection short-name → C# keyword, for the 17 framework primitives ILens
-    /// renders via <c>ReferenceFormatter.TypeKeyword</c>. Returns <c>null</c> for
-    /// any other name. Duplicated here (a few rows) for test isolation rather than
-    /// reaching into the production map.
+    /// Reflection short-name → C# keyword, for the framework types ILens renders via
+    /// <c>ReferenceFormatter.TypeKeyword</c>. Returns <c>null</c> for any other name.
+    /// Duplicated here (a few rows) for test isolation rather than reaching into the
+    /// production map.
     /// </summary>
     private static string? CSharpKeyword(string reflectionName) => reflectionName switch
     {
-        "Boolean" => "bool",    "Byte"    => "byte",    "SByte"  => "sbyte",
-        "Char"    => "char",    "Decimal" => "decimal", "Double" => "double",
-        "Single"  => "float",   "Int32"   => "int",     "UInt32" => "uint",
-        "Int64"   => "long",    "UInt64"  => "ulong",   "Int16"  => "short",
-        "UInt16"  => "ushort",  "Object"  => "object",  "String" => "string",
-        "Void"    => "void",    _         => null,
+        "Boolean" => "bool",    "Byte"    => "byte",    "SByte"   => "sbyte",
+        "Char"    => "char",    "Decimal" => "decimal", "Double"  => "double",
+        "Single"  => "float",   "Int32"   => "int",     "UInt32"  => "uint",
+        "Int64"   => "long",    "UInt64"  => "ulong",   "Int16"   => "short",
+        "UInt16"  => "ushort",  "IntPtr"  => "nint",    "UIntPtr" => "nuint",
+        "Object"  => "object",  "String"  => "string",  "Void"    => "void",
+        _         => null,
     };
 }

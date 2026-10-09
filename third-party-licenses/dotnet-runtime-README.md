@@ -11,8 +11,8 @@ runtime's own third-party dependencies.
 
 ## Provenance
 
-- Source URL: https://raw.githubusercontent.com/dotnet/runtime/v10.0.10/THIRD-PARTY-NOTICES.TXT
-- Runtime version: 10.0.10
+- Source URL: https://raw.githubusercontent.com/dotnet/runtime/v10.0.12/THIRD-PARTY-NOTICES.TXT
+- Runtime version: 10.0.12
 
 ## Refresh procedure
 
