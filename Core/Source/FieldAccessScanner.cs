@@ -101,10 +101,13 @@ public sealed class FieldAccessScanner
     }
 
     /// <summary>Every method that reads, or that writes, the field.</summary>
-    public IReadOnlyList<Access> Find(AccessKind kind)
+    public IReadOnlyList<Access> Find(AccessKind kind) => Find(kind, _metadata.MethodDefinitions);
+
+    /// <summary>Those of <paramref name="methods"/> that read, or that write, the field.</summary>
+    public IReadOnlyList<Access> Find(AccessKind kind, IEnumerable<MethodDefinitionHandle> methods)
     {
         var accesses = new List<Access>();
-        foreach (var handle in _metadata.MethodDefinitions)
+        foreach (var handle in methods)
         {
             var (listed, uncertainty) = Examine(handle, kind);
             if (listed)
@@ -269,13 +272,11 @@ public sealed class FieldAccessScanner
         var index = operand - (takesThis ? 1 : 0);
         if (index >= callee.Parameters.Count)
             return Untraced;
-        switch (callee.Parameters[index].ReferenceKind)
-        {
-            case ReferenceKind.In or ReferenceKind.RefReadOnly:
-                return Reads;
-            case ReferenceKind.Out when OwnMethod(callee) is not null:
-                return Writes;
-        }
+        var passing = ParameterPassing.Of(callee.Parameters[index]);
+        if (passing.ReadOnly)
+            return Reads;
+        if (passing.Keyword == ReferenceKind.Out && OwnMethod(callee) is not null)
+            return Writes;
 
         var name = ReferenceFormatter.FormatMethodReference(callee);
         var body = OwnMethod(callee);
@@ -308,7 +309,7 @@ public sealed class FieldAccessScanner
             {
                 return Untraced;
             }
-            var name = $"{ReferenceFormatter.FormatTypeName(type)}.{callee.Name}(" +
+            var name = $"{ReferenceFormatter.FormatTypeName(type)}.{callee.Name}{ReferenceFormatter.FormatTypeArguments(callee)}(" +
                 $"{string.Join(", ", callee.Parameters.Select(ReferenceFormatter.FormatParameterType))})";
             if (type.Kind == TypeKind.TypeParameter)
                 return Unknown(ReceiverKind.Calls, name);
@@ -383,8 +384,8 @@ public sealed class FieldAccessScanner
     /// </summary>
     private static bool RunsItsOwnBody(Instruction instruction, IMethod callee) =>
         instruction.OpCode != ILOpCode.Callvirt
-        || !(callee.IsVirtual || callee.IsOverride || callee.IsAbstract)
-        || callee.IsSealed
+        || !(callee.IsVirtual || Overriding.Of(callee) || callee.IsAbstract)
+        || Overriding.IsSealed(callee)
         || callee.DeclaringTypeDefinition is { IsSealed: true };
 
     /// <summary>
@@ -395,7 +396,7 @@ public sealed class FieldAccessScanner
     /// </summary>
     private static IMethod ImplementationIn(ITypeDefinition type, IMethod method)
     {
-        var candidates = type.Methods
+        var candidates = type.DeclaredMethods()
             .Where(candidate => !candidate.IsStatic
                 && candidate.Parameters.Count == method.Parameters.Count
                 && (candidate.Name == method.Name

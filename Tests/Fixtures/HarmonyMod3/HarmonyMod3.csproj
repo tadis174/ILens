@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only fixture: the lookups Harmony 3.0 adds, which find the code the
+    compiler generates for a method. Harmony 3.0 had no release on 2026-10-30,
+    so this project compiles against its release candidate 3.0.0-rc.4 and
+    HarmonyMod against the newest release, 2.4.3. Once 3.0 is released, this
+    project moves to it.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="3.0.0-rc.4" />
+  </ItemGroup>
+
+</Project>

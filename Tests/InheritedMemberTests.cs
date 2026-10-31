@@ -5,12 +5,14 @@ namespace Tests;
 
 /// <summary>
 /// End-to-end tests for the members a class inherits from a base class another assembly
-/// defines. The ExternalUser fixture's DerivedWidget derives from ExternalLib's Widget and
-/// overrides its Draw, and ExternalLib's own types derive from classes of the core library.
-/// ExternalLib.dll lands only in the References folder of the test output, so the shared server
-/// cannot load it for ExternalUser and names the base class where it stopped, while the second
-/// server, which has that folder as an allow-root, reads Widget's members. Both servers find the
-/// installed .NET libraries.
+/// defines, and for <c>applied_to</c> on an attribute class whose base attribute class another
+/// assembly defines. The ExternalUser fixture's DerivedWidget derives from ExternalLib's Widget
+/// and overrides its Draw, its LocalTagAttribute derives from ExternalLib's TagAttribute, and
+/// ExternalLib's own types derive from classes of the core library. ExternalLib.dll lands only
+/// in the References folder of the test output, so the shared server cannot load it for
+/// ExternalUser and names the base class where it stopped, while the second server, which has
+/// that folder as an allow-root, reads Widget's members. Both servers find the installed .NET
+/// libraries.
 /// </summary>
 public sealed class InheritedMemberTests
     : IClassFixture<ILensServerFixture>, IClassFixture<ReferencesServerFixture>
@@ -37,7 +39,9 @@ public sealed class InheritedMemberTests
     {
         // DerivedWidget's override of Draw hides Widget's, and Widget's constructors are not
         // inherited. Its property Size hides Widget's field of that name, and both are listed,
-        // as they are for two classes of one assembly.
+        // as they are for two classes of one assembly. The private field the compiler adds to
+        // Widget for the subscribers of Changed is generated, so it is neither listed nor counted
+        // among what the defaults leave out.
         string text = await CallToolText(_references.Client, "list_members", new()
         {
             ["assembly"] = _userPath,
@@ -218,8 +222,76 @@ public sealed class InheritedMemberTests
         });
 
         Assert.Equal(
-            "// ExternalUser.DerivedWidget.Polish(Widget) → void [extension method on ExternalUser.WidgetExtensions]",
+            "// ExternalUser.WidgetExtensions.Polish(Widget) → void [extension method on ExternalLib.Widget]",
             code.Split('\n')[0]);
+    }
+
+    // LocalTagAttribute is an attribute through ExternalLib's TagAttribute. The shared server
+    // cannot load that class, and what is marked with LocalTagAttribute shows it to be one.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Analyze_AppliedTo_OnAnAttributeWhoseBaseAnotherAssemblyDefines_ListsWhereItIsApplied(
+        bool loadsTheBase)
+    {
+        string text = await CallToolText(loadsTheBase ? _references.Client : _shared.Client, "analyze", new()
+        {
+            ["assembly"] = _userPath,
+            ["type_name"] = "ExternalUser.LocalTagAttribute",
+            ["kind"] = "applied_to",
+        });
+
+        Assert.Equal("1 symbol marked with ExternalUser.LocalTagAttribute:\nExternalUser.LocalTagged", text);
+    }
+
+    [Fact]
+    public async Task Analyze_AppliedTo_OnAnAttributeDerivingFromSystemAttribute_ListsWhereItIsApplied()
+    {
+        // The control: TagAttribute's base class is System.Attribute itself.
+        string text = await CallToolText(_shared.Client, "analyze", new()
+        {
+            ["assembly"] = _libraryPath,
+            ["type_name"] = "ExternalLib.TagAttribute",
+            ["kind"] = "applied_to",
+        });
+
+        Assert.Equal("1 symbol marked with ExternalLib.TagAttribute:\nExternalLib.Tagged", text);
+    }
+
+    [Fact]
+    public async Task Analyze_AppliedTo_OnAClassThatIsNoAttribute_IsRefusedWhenItsBaseIsRead()
+    {
+        // The walk reads Widget and reaches System.Object without meeting System.Attribute.
+        string error = await CallToolError(_references.Client, "analyze", new()
+        {
+            ["assembly"] = _userPath,
+            ["type_name"] = "ExternalUser.DerivedWidget",
+            ["kind"] = "applied_to",
+        });
+
+        Assert.Equal(
+            "Error: ArgumentException: Analysis kind 'applied_to' requires an attribute type; " +
+            "ExternalUser.DerivedWidget does not derive from System.Attribute.",
+            error);
+    }
+
+    [Fact]
+    public async Task Analyze_AppliedTo_OnAClassWhoseBaseItCannotLoad_SaysItDidNotCheck()
+    {
+        // Nothing is marked with DerivedWidget, which holds for a class that is no attribute
+        // and for an attribute applied nowhere. Only Widget, which is not read, tells them apart.
+        string text = await CallToolText(_shared.Client, "analyze", new()
+        {
+            ["assembly"] = _userPath,
+            ["type_name"] = "ExternalUser.DerivedWidget",
+            ["kind"] = "applied_to",
+        });
+
+        Assert.Equal(
+            "No symbols marked with ExternalUser.DerivedWidget\n" +
+            "Not checked: whether ExternalUser.DerivedWidget is an attribute; its base class ExternalLib.Widget " +
+            "was not read, since ILens could not load " + LibraryOrigin,
+            text);
     }
 
     private static async Task<string> CallToolText(

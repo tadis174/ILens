@@ -5,11 +5,13 @@
     answers for a type from another assembly. Tests places its DLL only in the
     References folder of the test output, which the shared test server does
     not search, so there ILens knows these types only from ExternalUser's
-    references to them.
+    references to them. The latest language version is for a ref readonly
+    parameter.
   -->
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <IsPackable>false</IsPackable>
     <IsPublishable>false</IsPublishable>

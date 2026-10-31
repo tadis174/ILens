@@ -8,17 +8,17 @@ The default fallback for an AI agent inspecting a compiled .NET assembly is to s
 
 | Task | `ilspycmd` cost | ILens tool | ILens cost |
 |------|----------------:|------------|-----------:|
-| List the public types in a namespace | 1,041,476 tokens | `find_types` | 1,101 tokens |
-| See the API surface of one mid-sized class | 1,041,476 tokens | `list_members` | 554 tokens |
-| Find which types expose a given method | 1,041,476 tokens | `find_methods` | 518 tokens |
+| List the public types in a namespace | 1,041,476 tokens | `find_types` | 1,109 tokens |
+| See the API surface of one mid-sized class | 1,041,476 tokens | `list_members` | 562 tokens |
+| Find which types expose a given method | 1,041,476 tokens | `find_methods` | 526 tokens |
 
-*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-10-09; token figures are character counts divided by 4, not a real tokenizer.*
+*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-10-31; token figures are character counts divided by 4, not a real tokenizer.*
 
 ILens turns assembly inspection into bounded, targeted lookups: list types in a namespace, list one type's members without bodies, find methods by name, decompile a single method body, run cross-reference analysis (callers, overrides, implementations, extension methods, attribute usage). Each call returns a focused response — making it cheap enough to leave registered as an always-available tool.
 
 ## Scope
 
-ILens is built for inspecting **C# assemblies**, and its output is C#. The metadata-driven tools (`find_types`, `find_methods`, `list_members`, `analyze`) read language-agnostic metadata and work on an assembly from any .NET language. `decompile` and `analyze`'s `call_sites` kind always emit C# — for an assembly compiled from F#, VB.NET, or C++/CLI they still run, but constructs without a C# equivalent may render unfaithfully.
+ILens is built for inspecting **C# assemblies**, and its output is C#. The metadata-driven tools (`find_types`, `find_methods`, `list_members`, `analyze`) read language-agnostic metadata and work on an assembly from any .NET language. `decompile`, `search_code` and `analyze`'s `call_sites` kind always emit C# — for an assembly compiled from F#, VB.NET, or C++/CLI they still run, but constructs without a C# equivalent may render unfaithfully.
 
 ## Built on ILSpy
 

@@ -17,7 +17,7 @@ public static class FindMethodsTool
         AssemblyHostRegistry registry,
         [Description(ParameterDescriptions.Assembly)] string assembly,
         [Description(ParameterDescriptions.NameContains)] string name_contains = null,
-        [Description($"Return-type pattern, matched by the rules of {nameof(parameter_types)}.")] string return_type = null,
+        [Description(ParameterDescriptions.ReturnType)] string return_type = null,
         [Description(ParameterDescriptions.ParameterTypes)] string[] parameter_types = null,
         [Description(ParameterDescriptions.ParameterCount)] int? parameter_count = null,
         [Description(ParameterDescriptions.Namespace)] string @namespace = null,
@@ -27,6 +27,7 @@ public static class FindMethodsTool
         [Description(ParameterDescriptions.IncludeCompilerGenerated)] bool include_compiler_generated = false,
         [Description(ParameterDescriptions.Limit)] int limit = ListOutput.DefaultLimit)
     {
+        parameter_types = TypeMatcher.SplitPatterns(parameter_types);
         SymbolResolver.ValidateDisambiguationArgs(parameter_count, parameter_types);
 
         if (!string.IsNullOrEmpty(type_name) && !string.IsNullOrEmpty(type_name_contains))
@@ -49,11 +50,17 @@ public static class FindMethodsTool
         if (!string.IsNullOrEmpty(@namespace))
             host.Resolver.RequireNamespace(@namespace);
 
+        // A generated type named here is listed whatever the switch says: it was asked for by
+        // name, and an empty answer would read as "it has no methods".
+        var includeGenerated = include_compiler_generated
+            || (resolvedDeclaringType != null && CompilerGeneratedFilter.IsCompilerGenerated(resolvedDeclaringType));
+
+        var leftOut = new LeftOut();
         var matches = ScanAssembly(host, name_contains, return_type, parameter_types,
             parameter_count, @namespace, resolvedDeclaringType, type_name_contains,
-            accessibility, include_compiler_generated);
+            accessibility, includeGenerated, leftOut);
 
-        return FormatResults(matches, limit);
+        return FormatResults(matches, limit, ListOutput.NotShown(leftOut, accessibility, matches.Count == 0));
     }
 
     private static List<IMethod> ScanAssembly(
@@ -66,7 +73,8 @@ public static class FindMethodsTool
         ITypeDefinition resolvedDeclaringType,
         string type_name_contains,
         AccessibilityFilter accessibility,
-        bool include_compiler_generated)
+        bool includeGenerated,
+        LeftOut leftOut)
     {
         var matches = new List<IMethod>();
 
@@ -81,13 +89,9 @@ public static class FindMethodsTool
                 !typeDef.Name.Contains(type_name_contains, StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            foreach (var method in typeDef.Methods)
+            foreach (var method in typeDef.DeclaredMethods())
             {
                 if (method.IsAccessor)
-                    continue;
-                if (!include_compiler_generated && CompilerGeneratedFilter.IsCompilerGenerated(method))
-                    continue;
-                if (!accessibility.Permits(method.Accessibility))
                     continue;
                 if (!string.IsNullOrEmpty(name_contains) &&
                     !method.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase))
@@ -114,7 +118,11 @@ public static class FindMethodsTool
                 if (!string.IsNullOrEmpty(return_type) && !TypeMatcher.Matches(method.ReturnType, return_type))
                     continue;
 
-                matches.Add(method);
+                // The two default filters come last, so that what they leave out of the
+                // question's matches can be counted.
+                if (leftOut.Admits(accessibility.Permits(method.Accessibility),
+                        !includeGenerated && CompilerGeneratedFilter.IsCompilerGenerated(method)))
+                    matches.Add(method);
             }
         }
 
@@ -124,16 +132,19 @@ public static class FindMethodsTool
     /// <summary>
     /// One line per method in the reference form the other tools print and take, without
     /// parameter names, so a line copied into parameter_types matches; static is kept, and so is
-    /// the return type, since a search by signature asks about both. Sorted by the reference.
+    /// the return type, since a search by signature asks about both. A line that would read
+    /// alike another method's is written in full. Sorted by the reference.
     /// </summary>
-    private static string FormatResults(List<IMethod> matches, int limit)
+    private static string FormatResults(List<IMethod> matches, int limit, string notShown)
     {
+        var name = ReferenceFormatter.Distinguishing(matches,
+            m => ReferenceFormatter.FormatMethodReference(m, full: false, withReturnType: true),
+            m => ReferenceFormatter.FormatMethodReference(m, full: true, withReturnType: true));
         var lines = matches
-            .Select(m => (Reference: ReferenceFormatter.FormatMethodReference(m), Method: m))
+            .Select(m => (Reference: name(m), Method: m))
             .OrderBy(entry => entry.Reference, StringComparer.Ordinal)
-            .Select(entry => $"{(entry.Method.IsStatic ? "static " : "")}{entry.Reference} → " +
-                ReferenceFormatter.FormatReturnType(entry.Method))
+            .Select(entry => $"{(entry.Method.IsStatic ? "static " : "")}{entry.Reference}")
             .ToList();
-        return ListOutput.Format(lines, limit, Noun.Regular("method"));
+        return ListOutput.Format(lines, limit, Noun.Regular("method"), notShown: notShown);
     }
 }

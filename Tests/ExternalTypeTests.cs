@@ -337,6 +337,12 @@ public sealed class ExternalTypeTests : IClassFixture<ILensServerFixture>
             "2 users of ExternalLib.Widget..ctor(int):",
             ["ExternalUser.Consumer.MakeWidget()", "ExternalUser.DerivedWidget..ctor()"]
         },
+        // And by the type's name, under which list_members prints them.
+        {
+            "ExternalLib.Widget", "Widget", "used_by", ["int"],
+            "2 users of ExternalLib.Widget..ctor(int):",
+            ["ExternalUser.Consumer.MakeWidget()", "ExternalUser.DerivedWidget..ctor()"]
+        },
         {
             "ExternalLib.Widget", "Size", "read_by", null,
             "2 readers of ExternalLib.Widget.Size:",
@@ -474,8 +480,9 @@ public sealed class ExternalTypeTests : IClassFixture<ILensServerFixture>
 
     [Theory]
     [InlineData("Paint", "uses", "reads the member's body, which is in the assembly that defines ExternalLib.Widget")]
+    [InlineData("Paint", "implements", "needs the class that declares the member, which is in the assembly that defines ExternalLib.Widget")]
     [InlineData("Draw", "overridden_by", "leaves no reference to the member it overrides or implements")]
-    [InlineData("Paint", "call_sites", "which this assembly does not define; 'used_by' lists the methods that call it")]
+    [InlineData("Paint", "call_sites", "which this assembly does not define; 'used_by' lists what uses it")]
     // A type-level kind is refused even for a member nothing references, whose empty answer
     // would otherwise pass for an answer to a question no member can take.
     [InlineData("NoSuchMember", "instantiated_by", "Analysis kind 'instantiated_by' is valid only for a type")]
@@ -520,15 +527,21 @@ public sealed class ExternalTypeTests : IClassFixture<ILensServerFixture>
         {
             ["assembly"] = _externalUserPath,
             ["type_name"] = "ExternalLib.Widget",
-            ["member_name"] = "Polish",
+            ["member_name"] = "paint",
             ["kind"] = "used_by",
         });
 
-        Assert.Equal("No users of ExternalLib.Widget.Polish", Header(text));
+        Assert.Equal("No users of ExternalLib.Widget.paint", Header(text));
         Assert.Equal(
-            "This assembly references no member Polish of ExternalLib.Widget. " +
-            "It references: .ctor, Changed, Count, Label, Paint, Size.",
-            ResultLines(text).Single());
+            new[]
+            {
+                "This assembly references no member paint of ExternalLib.Widget. " +
+                "It references: .ctor, Changed, Count, Label, Paint, Size.",
+                // A constant leaves no reference, and this server cannot load ExternalLib to rule one out.
+                "ILens cannot tell whether paint is a constant, whose value the compiler copies into each use: " +
+                "no assembly it found defines ExternalLib.Widget, which comes from ExternalLib, Version=1.0.0.0.",
+            },
+            ResultLines(text));
     }
 
     [Theory]
@@ -551,7 +564,16 @@ public sealed class ExternalTypeTests : IClassFixture<ILensServerFixture>
         Assert.Equal(
             memberName is null ? "No users of ExternalLib.NoSuchType" : "No users of ExternalLib.NoSuchType.Member",
             Header(text));
-        Assert.Equal(NotReferenced, ResultLines(text).Single());
+        Assert.Equal(
+            memberName is null
+                ? new[] { NotReferenced }
+                : new[]
+                {
+                    NotReferenced,
+                    "ILens cannot tell whether Member is a constant, whose value the compiler copies into each use: " +
+                    "no assembly it found defines ExternalLib.NoSuchType.",
+                },
+            ResultLines(text));
     }
 
     [Fact]
@@ -569,14 +591,25 @@ public sealed class ExternalTypeTests : IClassFixture<ILensServerFixture>
         Assert.Equal(
             new[]
             {
-                "HarmonyMod.ConstructorPatch", "HarmonyMod.EventAdderPatch", "HarmonyMod.EventRemoverPatch",
+                "HarmonyMod.ConstructedNestedConstructorPatch", "HarmonyMod.ConstructedNestedPatch",
+                "HarmonyMod.ConstructorPatch", "HarmonyMod.DelegatePatches.Capacity",
+                "HarmonyMod.EventAdderPatch", "HarmonyMod.EventRemoverPatch",
                 "HarmonyMod.ExternalIndexerGetterPatch", "HarmonyMod.ExternalIndexerSetterPatch",
-                "HarmonyMod.FinalizeMethodPatch", "HarmonyMod.GenericConstructorPatch", "HarmonyMod.GetterPatch",
+                "HarmonyMod.FinalizeMethodPatch", "HarmonyMod.GenericConstructorPatch",
+                "HarmonyMod.GenericNestedConstructorPatch", "HarmonyMod.GenericNestedPatch", "HarmonyMod.GetterPatch",
+                "HarmonyMod.GridConstructorPatch",
+                "HarmonyMod.IgnoredTypesEventAdderPatch", "HarmonyMod.IgnoredTypesEventRemoverPatch",
+                "HarmonyMod.IgnoredTypesFinalizerPatch", "HarmonyMod.IgnoredTypesGetterPatch",
+                "HarmonyMod.IgnoredTypesSetterPatch", "HarmonyMod.IgnoredTypesStaticConstructorPatch",
                 "HarmonyMod.IndexerGetterPatch", "HarmonyMod.IndexerSetterPatch",
+                "HarmonyMod.ListArrayConstructorPatch",
                 "HarmonyMod.MarkedMethodsPatch.BeforeSetProp()", "HarmonyMod.NestedConstructorPatch",
-                "HarmonyMod.OperatorPatch", "HarmonyMod.ParameterlessConstructorPatch",
+                "HarmonyMod.NestedParameterConstructorPatch",
+                "HarmonyMod.NullableConstructorPatch", "HarmonyMod.OperatorPatch",
+                "HarmonyMod.ParameterlessConstructorPatch",
                 "HarmonyMod.RenamedIndexerGetterPatch", "HarmonyMod.RenamedIndexerSetterPatch",
-                "HarmonyMod.TextConstructorPatch", "HarmonyMod.TextTargetPatch",
+                "HarmonyMod.TextConstructorPatch", "HarmonyMod.TextTargetGenericPatch", "HarmonyMod.TextTargetPatch",
+                "HarmonyMod.UnboundGenericPatch", "HarmonyMod.UnboundNestedPatch",
             },
             ResultLines(text).Order());
     }

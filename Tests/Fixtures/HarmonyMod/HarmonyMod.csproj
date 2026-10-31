@@ -2,9 +2,10 @@
 
   <!--
     Test-only fixture: a tiny Harmony-patching assembly that exercises every
-    pattern find_harmony_dependencies extracts. Not consumed by Tests' source
-    code — only its compiled output (HarmonyMod.dll + HarmonyLib.dll) is
-    inspected by the ILens server during the e2e suite.
+    pattern find_harmony_dependencies extracts but those only Harmony 3.0 has,
+    which HarmonyMod3 holds. Not consumed by Tests' source code — only its
+    compiled output (HarmonyMod.dll + HarmonyLib.dll) is inspected by the ILens
+    server during the e2e suite.
   -->
 
   <PropertyGroup>
@@ -17,7 +18,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Lib.Harmony" Version="2.3.6" />
+    <PackageReference Include="Lib.Harmony" Version="2.4.3" />
   </ItemGroup>
 
 </Project>

@@ -1,6 +1,5 @@
 using System.Reflection.Metadata;
 using System.Xml.Linq;
-using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.ILSpyX.Abstractions;
@@ -40,37 +39,26 @@ internal sealed class StubSettingsProvider : ISettingsProvider
 /// Minimal <see cref="ILanguage"/> stub. The ILSpyX analyzers exposed by
 /// <see cref="AssemblyHost.RunAnalyzer"/> do not call most of these methods,
 /// but the interface must be satisfied for an AnalyzerContext to be constructible.
-/// <see cref="GetCodeMappingInfo"/> is the exception: it is real, not a stub.
 /// </summary>
 internal sealed class StubLanguage : ILanguage
 {
     public bool ShowMember(IEntity member) => true;
 
     /// <summary>
-    /// For a method handle, the C# decompiler's map between that method and the methods the
-    /// compiler split out of its body (lambdas, local functions, iterator and async state
-    /// machines). For any other handle, an empty map.
+    /// An empty map between methods and the methods the compiler split out of their bodies
+    /// (lambdas, local functions, iterator and async state machines).
     /// </summary>
     /// <remarks>
-    /// "Uses" asks with a method handle and scans every part the map lists. With an empty map
-    /// it sees only the stub that constructs an iterator's or async method's state machine and
-    /// silently misses the body.
-    ///
-    /// The incoming analyzers ask with the handle of each type they scan. They get the empty
-    /// map, report a use inside generated code under the generated method, and
-    /// <see cref="AssemblyHost.AttributeToSource"/> attributes it to source for every incoming
-    /// kind alike. Giving them the real map changes no answer and costs time: "Instantiated By"
-    /// builds it for every type in scope, and ILSpyX's "Read By", which builds it the same way,
-    /// took 2.3 s on a game's main assembly with it against 0.9 s without (measured
-    /// 2026-09-27).
+    /// The analyzers ILens runs that ask for the map do so with the handle of a type they
+    /// scan. With the empty map they report a use inside generated code under the generated
+    /// method, and <see cref="AssemblyHost.AttributeToSource"/> attributes it to source for
+    /// every incoming kind alike. Giving them a real map changes no answer and costs time:
+    /// "Instantiated By" asks for it for every type in scope, and ILSpyX's "Read By", which
+    /// asks the same way, took 2.3 s on a game's main assembly with ILSpy's map against 0.9 s
+    /// without (measured 2026-09-27).
     /// </remarks>
     public CodeMappingInfo GetCodeMappingInfo(MetadataFile module, EntityHandle member)
-        => member.Kind switch
-        {
-            HandleKind.MethodDefinition => CSharpDecompiler.GetCodeMappingInfo(module, member),
-            HandleKind.TypeDefinition => new(module, (TypeDefinitionHandle)member),
-            _ => new(module, default(TypeDefinitionHandle)),
-        };
+        => new(module, member.Kind == HandleKind.TypeDefinition ? (TypeDefinitionHandle)member : default);
 
     public string GetEntityName(MetadataFile module, EntityHandle handle,
         bool fullName, bool omitGenerics)

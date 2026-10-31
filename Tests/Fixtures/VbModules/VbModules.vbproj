@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only fixture, in Visual Basic: a module that declares extension methods, which the
+    compiler writes into a sealed class that is not static, and a class with an event and an
+    auto-implemented property, for which the compiler adds fields. Not consumed by Tests' source code;
+    only its compiled output is inspected by the ILens server during the e2e suite. The empty
+    root namespace keeps the namespace the source declares as the whole namespace.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace></RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+</Project>

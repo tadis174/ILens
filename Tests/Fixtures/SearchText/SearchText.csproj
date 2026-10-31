@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only fixture: one known line in each place search_code has to find or
+    leave out, each under the member it belongs to. Not consumed by Tests'
+    source code; only its compiled output is inspected by the ILens server
+    during the e2e suite.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+</Project>

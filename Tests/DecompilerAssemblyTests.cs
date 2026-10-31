@@ -38,10 +38,12 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             ["limit"] = 1000,
         });
 
+        // The namespace holds internal types as well, which the last line counts.
         var lines = text.Split('\n');
         Assert.Matches(@"^\d+ types:$", lines[0]);
-        Assert.All(lines.Skip(1), line => Assert.StartsWith("ICSharpCode.Decompiler.TypeSystem.", line));
+        Assert.All(lines[1..^1], line => Assert.StartsWith("ICSharpCode.Decompiler.TypeSystem.", line));
         Assert.DoesNotContain(lines, line => line.StartsWith("ICSharpCode.Decompiler.TypeSystem.Implementation."));
+        Assert.Matches(@"^Not shown: \d+ internal or private$", lines[^1]);
     }
 
     [Fact]
@@ -67,12 +69,15 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             ["assembly"] = _server.AssemblyPath,
         });
 
+        // After the list come the line for what the limit cut and the line for the internal
+        // types, which the accessibility filter left out.
         var lines = text.Split('\n');
         int total = ParseLeadingCount(text);
         Assert.True(total > 100, $"Expected more types than the default limit, got: {lines[0]}");
-        Assert.Equal(102, lines.Length);
-        Assert.Equal($"... ({total - 100} more; raise limit to see all)", lines[^1]);
-        Assert.Equal(lines[1..^1].Order(StringComparer.Ordinal), lines[1..^1]);
+        Assert.Equal(103, lines.Length);
+        Assert.Equal($"... ({total - 100} more; raise limit to see all)", lines[^2]);
+        Assert.Matches(@"^Not shown: \d+ internal or private$", lines[^1]);
+        Assert.Equal(lines[1..^2].Order(StringComparer.Ordinal), lines[1..^2]);
     }
 
     [Fact]
@@ -93,7 +98,9 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             ["name_contains"] = type.Name,
         };
 
-        Assert.Equal("No types", await CallToolText("find_types", arguments));
+        Assert.Equal(
+            "No types\nNot shown: 1 internal or private; accessibility all lists it",
+            await CallToolText("find_types", arguments));
         Assert.Equal(
             $"1 type:\n{type.FullName}",
             await CallToolText("find_types", new(arguments) { ["accessibility"] = "all" }));
@@ -116,16 +123,16 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     public async Task FindTypes_DefaultsToHidingRoslynClosureClasses()
     {
         // <>c is the canonical Roslyn name for the per-method cached-delegate
-        // host. Filtered by default — searching for it should return "No types".
-        // With the switch on, the same search hits real entries. The closure
-        // classes are private, so both calls ask for every accessibility.
+        // host. Filtered by default — searching for it lists no type and says how
+        // many the filter left out. With the switch on, the same search lists
+        // them. The closure classes are private, so both calls ask for every
+        // accessibility.
         string filtered = await CallToolText("find_types", new()
         {
             ["assembly"] = _server.AssemblyPath,
             ["name_contains"] = "<>c",
             ["accessibility"] = "all",
         });
-        Assert.Equal("No types", filtered);
 
         string unfiltered = await CallToolText("find_types", new()
         {
@@ -135,6 +142,10 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             ["include_compiler_generated"] = true,
         });
         Assert.NotEqual("No types", unfiltered);
+        Assert.Equal(
+            $"No types\nNot shown: {ParseLeadingCount(unfiltered)} compiler-generated; " +
+            "include_compiler_generated lists them",
+            filtered);
     }
 
     [Fact]
@@ -157,7 +168,9 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
                 ["name_contains"] = "$BurstDirectCall",
                 ["accessibility"] = "all",
             });
-            Assert.Equal("No types", filtered);
+            Assert.Equal(
+                "No types\nNot shown: 1 compiler-generated; include_compiler_generated lists it",
+                filtered);
 
             // Filter off — the same search hits the synthesized nested type.
             string unfiltered = await CallToolText("find_types", new()
@@ -188,7 +201,9 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
                 ["assembly"] = path,
                 ["name_contains"] = "$BurstDirectCall",
             });
-            Assert.Equal("No methods", filtered);
+            Assert.Equal(
+                "No methods\nNot shown: 1 compiler-generated; include_compiler_generated lists it",
+                filtered);
 
             string unfiltered = await CallToolText("find_methods", new()
             {
@@ -326,7 +341,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     [InlineData("System.Span<>", "Item", "public ref T Item[int index] { get; }")]
     [InlineData("System.ReadOnlySpan<>", "Item", "public ref readonly T Item[int index] { get; }")]
     [InlineData("System.Runtime.CompilerServices.Unsafe", "AsRef",
-        "public static ref T AsRef<T>(ref readonly T source)")]
+        "public static ref T AsRef<T>(ref readonly T source) where T : allows ref struct")]
     [InlineData("System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute", "IsOptional",
         "public bool IsOptional { get; init; }")]
     public async Task ListMembers_WritesReferencesAndInitAsCSharp(string typeName, string name, string expected)
@@ -365,7 +380,9 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     }
 
     // The first line of decompile writes each parameter and the return as C# does, and
-    // a parameter type copied from it selects the overload it came from.
+    // a parameter type copied from it selects the overload it came from. Write has overloads
+    // without type parameters, so its name without them reaches a generic one only through
+    // parameter types that the generic one alone has.
     [Theory]
     [InlineData("System.Collections.Generic.Dictionary<,>", "TryGetValue", new[] { "TKey", "out TValue" },
         "// System.Collections.Generic.Dictionary<,>.TryGetValue(TKey, out TValue) → bool")]
@@ -373,8 +390,10 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         "// System.ReadOnlySpan<>.get_Item(int) → ref readonly T")]
     [InlineData("System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute", "set_IsOptional", new[] { "bool" },
         "// System.Runtime.CompilerServices.CompilerFeatureRequiredAttribute.set_IsOptional(bool) → void")]
+    [InlineData("System.Diagnostics.Tracing.EventSource", "Write<T>", new[] { "string", "ref EventSourceOptions", "ref T" },
+        "// System.Diagnostics.Tracing.EventSource.Write<T>(string, ref EventSourceOptions, ref T) → void")]
     [InlineData("System.Diagnostics.Tracing.EventSource", "Write", new[] { "string", "ref EventSourceOptions", "ref T" },
-        "// System.Diagnostics.Tracing.EventSource.Write(string, ref EventSourceOptions, ref T) → void")]
+        "// System.Diagnostics.Tracing.EventSource.Write<T>(string, ref EventSourceOptions, ref T) → void")]
     public async Task DecompileMethod_WritesReferencesAsCSharp_AndTakesThemBack(
         string typeName, string methodName, string[] parameterTypes, string expectedHeader)
     {
@@ -790,8 +809,8 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     [Fact]
     public async Task Analyze_ReadBy_OnAProperty_MatchesTheGetterCallers()
     {
-        // ILSpyX has no property-level usage analyzer, so analyze routes a property
-        // read/assign/use query to the accessor and runs "Used By" there. Asserting the
+        // A property has no usage answer of its own, so analyze routes a property
+        // read/assign/use query to the accessor and asks who uses that. Asserting the
         // two routes agree pins the behavior without hard-coding call sites that drift
         // as the upstream package moves.
         string viaProperty = await CallToolText("analyze", new()
@@ -972,7 +991,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     {
         // "field" instead of ["field"] is a routine slip, and the SDK's binder answers it
         // with a raw serializer failure naming an internal type. There is only one thing a
-        // lone value can mean, so ArrayCoercionFilter promotes it — the two calls must be
+        // lone value can mean, so ArgumentValueFilter promotes it — the two calls must be
         // indistinguishable.
         // DecompilerSettings exposes no public or protected field of its own, so widen the
         // accessibility filter — otherwise both calls agree on "no members match" and the
@@ -1289,10 +1308,14 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         Assert.Contains("→", text);
     }
 
+    private const string HintNeedsMember =
+        "parameter_count, parameter_types and return_type select a method overload, so they need member_name.";
+
     [Theory]
     [InlineData("parameter_name", "count", "parameter_name and non_default_only apply only to kind 'call_sites'.")]
     [InlineData("non_default_only", true, "parameter_name and non_default_only apply only to kind 'call_sites'.")]
-    [InlineData("parameter_count", 0, "parameter_count and parameter_types select a method overload, so they need member_name.")]
+    [InlineData("parameter_count", 0, HintNeedsMember)]
+    [InlineData("return_type", "bool", HintNeedsMember)]
     public async Task Analyze_WithAParameterTheQuestionCannotUse_ReturnsError(string parameter, object value, string expected)
     {
         // Dropped silently, the parameter would leave the answer to a broader question looking
@@ -1309,8 +1332,10 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         Assert.Contains(expected, text);
     }
 
-    [Fact]
-    public async Task Decompile_WithAnOverloadHintButNoMember_ReturnsError()
+    [Theory]
+    [InlineData("parameter_count", 0)]
+    [InlineData("return_type", "bool")]
+    public async Task Decompile_WithAnOverloadHintButNoMember_ReturnsError(string parameter, object value)
     {
         // A hint selects a method overload. Without member_name it would be dropped silently
         // and the whole type returned as if that were the answer.
@@ -1318,12 +1343,11 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         {
             ["assembly"] = _server.AssemblyPath,
             ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
-            ["parameter_count"] = 0,
+            [parameter] = value,
         });
 
         Assert.True(result.IsError, $"Expected an error, got: {text}");
-        Assert.Contains(
-            "parameter_count and parameter_types select a method overload, so they need member_name.", text);
+        Assert.Contains(HintNeedsMember, text);
     }
 
     [Fact]

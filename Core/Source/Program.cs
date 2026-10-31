@@ -28,11 +28,12 @@ if (args.Any(a => a == "--version" || a == "-v"))
     return 0;
 }
 
-// Strict argument parsing: only --allow-root and --max-total-size are accepted.
-// A flag missing its value, or any unknown token, fails fast — typos like
+// Strict argument parsing: only --allow-root, --max-total-size and --max-search-seconds
+// are accepted. A flag missing its value, or any unknown token, fails fast — typos like
 // '--allow-roots' must not silently launch a server with no roots.
 var allowedRoots = new List<string>();
 long? maxTotalBytes = null;
+TimeSpan? searchTimeLimit = null;
 for (int i = 0; i < args.Length; i++)
 {
     var arg = args[i];
@@ -61,12 +62,29 @@ for (int i = 0; i < args.Length; i++)
         }
         maxTotalBytes = mb * 1024L * 1024L;
     }
+    else if (arg == "--max-search-seconds")
+    {
+        if (i + 1 >= args.Length)
+        {
+            Console.Error.WriteLine("[ILens] --max-search-seconds requires a number of seconds");
+            return 1;
+        }
+        var raw = args[++i];
+        // 0 is allowed: a search then decompiles the least it can per call, one type.
+        if (!int.TryParse(raw, out var seconds) || seconds < 0)
+        {
+            Console.Error.WriteLine(
+                $"[ILens] --max-search-seconds must be a non-negative integer (seconds): {raw}");
+            return 1;
+        }
+        searchTimeLimit = TimeSpan.FromSeconds(seconds);
+    }
     else
     {
         Console.Error.WriteLine($"[ILens] unknown argument: {arg}");
         Console.Error.WriteLine(
             "[ILens] usage: ILens [--version] [--allow-root <directory> ...] " +
-            "[--max-total-size <MB>]");
+            "[--max-total-size <MB>] [--max-search-seconds <n>]");
         return 1;
     }
 }
@@ -93,7 +111,7 @@ catch (InvalidOperationException ex)
     return 1;
 }
 
-var registry = new AssemblyHostRegistry(guard, maxTotalBytes);
+var registry = new AssemblyHostRegistry(guard, maxTotalBytes, searchTimeLimit);
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -120,10 +138,10 @@ builder.Services
         // Order matters: the SDK wraps its filter pipeline back-to-front, so the
         // first-registered filter is the outermost. ToolErrorFilter must stay first
         // to catch and format what the others throw, and argument names must be
-        // validated before ArrayCoercionFilter rewrites any of their values.
+        // validated before ArgumentValueFilter reads or rewrites any of their values.
         ToolErrorFilter.Install(options);
         UnknownArgumentFilter.Install(options);
-        ArrayCoercionFilter.Install(options);
+        ArgumentValueFilter.Install(options);
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly(serializerOptions: jsonOptions);

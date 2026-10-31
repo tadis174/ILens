@@ -32,80 +32,22 @@ $PSNativeCommandUseErrorActionPreference = $false
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $outPath  = Join-Path $PSScriptRoot 'why-ilens-stats.json'
 
-# --- Minimal MCP client over stdio ---------------------------------------
-# ILens speaks MCP JSON-RPC 2.0 over stdio: one JSON object per line. The
-# helpers below are just enough of a client to handshake and call read-only
-# tools. stderr is left attached to this console (see the spawn block) so an
-# unread pipe cannot deadlock the server.
+# --- Helpers -------------------------------------------------------------
 
-function Send-McpMessage {
-    param(
-        [System.IO.StreamWriter]$Writer,
-        [hashtable]$Message
-    )
-    $json = $Message | ConvertTo-Json -Depth 12 -Compress
-    $Writer.Write($json + "`n")
-    $Writer.Flush()
-}
-
-function Read-McpLine {
-    param(
-        [System.IO.StreamReader]$Reader,
-        [int]$TimeoutMs = 60000
-    )
-    $task = $Reader.ReadLineAsync()
-    if (-not $task.Wait($TimeoutMs)) {
-        throw "Timed out after $TimeoutMs ms waiting for output from ILens."
-    }
-    return $task.Result
-}
-
-function Invoke-McpRequest {
-    param(
-        [System.IO.StreamWriter]$Writer,
-        [System.IO.StreamReader]$Reader,
-        [hashtable]$Request
-    )
-    Send-McpMessage -Writer $Writer -Message $Request
-    while ($true) {
-        $line = Read-McpLine -Reader $Reader
-        if ($null -eq $line) {
-            throw "ILens closed its output stream before answering request id=$($Request.id)."
-        }
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        $obj = $line | ConvertFrom-Json
-        if (($obj.PSObject.Properties.Name -contains 'id') -and ($obj.id -eq $Request.id)) {
-            return $obj
-        }
-        # Anything else on stdout (e.g. a notification) is not our response.
-    }
-}
-
+# Asks ILens one tool call through Tests/ask-server.ps1, which prints the
+# answer text and nothing else, so the length of what comes back is the length
+# of the answer. Uses $ILensExe and $allowRoot as resolved further down.
 function Measure-ILensTool {
     param(
-        [System.IO.StreamWriter]$Writer,
-        [System.IO.StreamReader]$Reader,
-        [int]$Id,
         [string]$ToolName,
         [hashtable]$Arguments
     )
-    $request = @{
-        jsonrpc = '2.0'
-        id      = $Id
-        method  = 'tools/call'
-        params  = @{ name = $ToolName; arguments = $Arguments }
+    $text = & (Join-Path $repoRoot 'Tests' 'ask-server.ps1') -ILensExe $ILensExe -AllowRoot $allowRoot `
+        -Tool $ToolName -Arguments $Arguments -TimeoutSeconds 60
+    if ($LASTEXITCODE -ne 0) {
+        throw "ILens tool '$ToolName' gave no usable answer (ask-server.ps1 exit code $LASTEXITCODE). $text"
     }
-    $response = Invoke-McpRequest -Writer $Writer -Reader $Reader -Request $request
-    if ($response.PSObject.Properties.Name -contains 'error') {
-        throw "ILens tool '$ToolName' failed: $($response.error | ConvertTo-Json -Compress)"
-    }
-    if ($response.result.isError) {
-        $errText = ($response.result.content | ForEach-Object { $_.text }) -join "`n"
-        throw "ILens tool '$ToolName' returned an error: $errText"
-    }
-    return ($response.result.content |
-        Where-Object { $_.type -eq 'text' } |
-        ForEach-Object { $_.text }) -join "`n"
+    return [string]$text
 }
 
 function Get-TokenEstimate {
@@ -203,62 +145,19 @@ $baselineChars = $baselineText.Length
 
 # --- Measure ILens tool output sizes -------------------------------------
 
-Write-Host "Spawning ILens and measuring tool output..."
+Write-Host "Asking ILens and measuring tool output..."
 
-$psi = [System.Diagnostics.ProcessStartInfo]::new()
-$psi.FileName = $ILensExe
-$psi.ArgumentList.Add('--allow-root')
-$psi.ArgumentList.Add($allowRoot)
-$psi.RedirectStandardInput  = $true
-$psi.RedirectStandardOutput = $true
-# Leave stderr attached to this console: ILens logs there, and an unread
-# redirected stderr pipe could fill and deadlock the process.
-$psi.RedirectStandardError  = $false
-$psi.UseShellExecute        = $false
-$psi.StandardInputEncoding  = [System.Text.UTF8Encoding]::new($false)
-$psi.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
-
-$proc = [System.Diagnostics.Process]::Start($psi)
-try {
-    $stdin  = $proc.StandardInput
-    $stdout = $proc.StandardOutput
-
-    # Handshake: initialize request, then the initialized notification.
-    $initResponse = Invoke-McpRequest -Writer $stdin -Reader $stdout -Request @{
-        jsonrpc = '2.0'
-        id      = 1
-        method  = 'initialize'
-        params  = @{
-            protocolVersion = '2024-11-05'
-            capabilities    = @{}
-            clientInfo      = @{ name = 'ilens-measure'; version = '1.0' }
-        }
-    }
-    if ($initResponse.PSObject.Properties.Name -contains 'error') {
-        throw "ILens rejected initialize: $($initResponse.error | ConvertTo-Json -Compress)"
-    }
-    Send-McpMessage -Writer $stdin -Message @{ jsonrpc = '2.0'; method = 'notifications/initialized' }
-
-    $findTypesText = Measure-ILensTool -Writer $stdin -Reader $stdout -Id 2 -ToolName 'find_types' -Arguments @{
-        assembly      = $targetDll
-        namespace     = 'ICSharpCode.Decompiler.TypeSystem'
-    }
-    $listMembersText = Measure-ILensTool -Writer $stdin -Reader $stdout -Id 3 -ToolName 'list_members' -Arguments @{
-        assembly = $targetDll
-        type_name = 'ICSharpCode.Decompiler.CSharp.CSharpDecompiler'
-    }
-    $findMethodsText = Measure-ILensTool -Writer $stdin -Reader $stdout -Id 4 -ToolName 'find_methods' -Arguments @{
-        assembly    = $targetDll
-        name_contains = 'Decompile'
-    }
+$findTypesText = Measure-ILensTool -ToolName 'find_types' -Arguments @{
+    assembly      = $targetDll
+    namespace     = 'ICSharpCode.Decompiler.TypeSystem'
 }
-finally {
-    if (-not $proc.HasExited) {
-        try { $proc.StandardInput.Close() } catch { }
-        if (-not $proc.WaitForExit(10000)) {
-            $proc.Kill()
-        }
-    }
+$listMembersText = Measure-ILensTool -ToolName 'list_members' -Arguments @{
+    assembly = $targetDll
+    type_name = 'ICSharpCode.Decompiler.CSharp.CSharpDecompiler'
+}
+$findMethodsText = Measure-ILensTool -ToolName 'find_methods' -Arguments @{
+    assembly    = $targetDll
+    name_contains = 'Decompile'
 }
 
 # --- Assemble and write the artifact -------------------------------------

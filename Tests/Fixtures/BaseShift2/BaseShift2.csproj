@@ -3,9 +3,18 @@
   <!--
     Twin of BaseShift. Compiles BaseShift's sources with SHIFTED defined, which
     gives the types named *Mover another base class or interface, changes some of
-    Gauge's accessor bodies, shifts every compiler-generated name in Renumbered
-    and changes ChangedInside only inside generated code, and nothing else, so a
-    comparison of the two assemblies reports exactly those.
+    Gauge's accessor bodies, shifts every compiler-generated name in Renumbered,
+    changes ChangedInside only inside generated code, gives the interface
+    IGrowing three members more and one method of Scales another body, gives the
+    second of each pair of overloads in BaseShift.Overloads another body, changes
+    Replaced's parameter type and type parameter name, changes BaseShift.Signatures,
+    BaseShift.Values, BaseShift.Diffs, BaseShift.Fields, BaseShift.Sides,
+    BaseShift.Declarations, BaseShift.Kinds, BaseShift.Retyped,
+    BaseShift.Constraints, BaseShift.Variance, BaseShift.Modifiers,
+    BaseShift.Namesakes, BaseShift.Defaults, BaseShift.Arity, with the
+    class System.Version<T> that Arity.cs declares, BaseShift.Keywords and
+    BaseShift.Bodies, as their files describe, and nothing else, so a comparison
+    of the two assemblies reports exactly those.
   -->
 
   <PropertyGroup>
@@ -21,6 +30,24 @@
     <Compile Include="..\BaseShift\Types.cs" Link="Types.cs" />
     <Compile Include="..\BaseShift\Accessors.cs" Link="Accessors.cs" />
     <Compile Include="..\BaseShift\Generated.cs" Link="Generated.cs" />
+    <Compile Include="..\BaseShift\Members.cs" Link="Members.cs" />
+    <Compile Include="..\BaseShift\Overloads.cs" Link="Overloads.cs" />
+    <Compile Include="..\BaseShift\Signatures.cs" Link="Signatures.cs" />
+    <Compile Include="..\BaseShift\Values.cs" Link="Values.cs" />
+    <Compile Include="..\BaseShift\Diffs.cs" Link="Diffs.cs" />
+    <Compile Include="..\BaseShift\Fields.cs" Link="Fields.cs" />
+    <Compile Include="..\BaseShift\Sides.cs" Link="Sides.cs" />
+    <Compile Include="..\BaseShift\Declarations.cs" Link="Declarations.cs" />
+    <Compile Include="..\BaseShift\Kinds.cs" Link="Kinds.cs" />
+    <Compile Include="..\BaseShift\Retyped.cs" Link="Retyped.cs" />
+    <Compile Include="..\BaseShift\Constraints.cs" Link="Constraints.cs" />
+    <Compile Include="..\BaseShift\Variance.cs" Link="Variance.cs" />
+    <Compile Include="..\BaseShift\Modifiers.cs" Link="Modifiers.cs" />
+    <Compile Include="..\BaseShift\Namesakes.cs" Link="Namesakes.cs" />
+    <Compile Include="..\BaseShift\Defaults.cs" Link="Defaults.cs" />
+    <Compile Include="..\BaseShift\Arity.cs" Link="Arity.cs" />
+    <Compile Include="..\BaseShift\Keywords.cs" Link="Keywords.cs" />
+    <Compile Include="..\BaseShift\Bodies.cs" Link="Bodies.cs" />
   </ItemGroup>
 
 </Project>

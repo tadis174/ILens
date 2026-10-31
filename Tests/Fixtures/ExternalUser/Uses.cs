@@ -68,6 +68,22 @@ namespace ExternalUser
         private static void Fill(out int value) { value = 1; }
     }
 
+    // Uses ExternalLib's constants and an enum value, whose values the compiler copies into
+    // each use, so nothing here refers to them, nor to the classes that only declare constants.
+    public class LimitReader
+    {
+        public int Most() => Limits.Most;
+
+        public decimal Rate() => Limits.Rate;
+
+        public int Dark() => (int)Shade.Dark;
+
+        public int Floor() => Limits.Deep.Floor;
+
+        // Named through the class that inherits it.
+        public int Least() => DerivedLimits.Least;
+    }
+
     // Its constructor calls the base constructor, which creates no Widget. Its property Size
     // hides Widget's field of that name.
     public class DerivedWidget : Widget
@@ -96,11 +112,26 @@ namespace ExternalUser
     // Implements IShape through Canvas, which nothing in this assembly shows.
     public class MyCanvas : Canvas { }
 
+    public struct Slot
+    {
+        public int Width;
+    }
+
+    // Beside two extension methods for ExternalLib's classes, one for its struct Point passed by
+    // ref and one for this assembly's struct Slot passed by ref readonly, for the tests on
+    // finding an extension method whose receiver is passed by reference, and one for IntPtr,
+    // which ILSpy reads in a signature as nint, for the test on a receiver of that type.
     public static class WidgetExtensions
     {
         public static void Polish(this Widget widget) { }
 
         public static void Fill(this Gadget<int> gadget) { }
+
+        public static void Nudge(this ref Point point) { }
+
+        public static int Span(this ref readonly Slot slot) => slot.Width;
+
+        public static long Offset(this System.IntPtr pointer) => pointer.ToInt64();
     }
 
     [Mark]
@@ -111,6 +142,55 @@ namespace ExternalUser
 
         public void MarkedParameter([Mark] int value) { }
     }
+
+    public interface ILocalGauge
+    {
+        void Reset();
+    }
+
+    // Implements ExternalLib's IGauge and its own ILocalGauge, each member implicitly. Tap
+    // implements nothing, and neither Tick, which is private, nor Zero, which is static, can
+    // implement by its name, whatever IGauge declares.
+    public class Dial : IGauge, ILocalGauge
+    {
+        public int Read() => 0;
+
+        public string Unit => "bar";
+
+        public event EventHandler Moved
+        {
+            add { }
+            remove { }
+        }
+
+        public void Reset() { }
+
+        public void Tap() { }
+
+        private void Tick() { }
+
+        public static void Zero() { }
+    }
+
+    // Implements IGauge explicitly, so each member's own metadata row names what it implements.
+    public class SealedDial : IGauge
+    {
+        int IGauge.Read() => 1;
+
+        string IGauge.Unit => "psi";
+
+        event EventHandler IGauge.Moved
+        {
+            add { }
+            remove { }
+        }
+    }
+
+    // An attribute whose base attribute class ExternalLib defines.
+    public sealed class LocalTagAttribute : TagAttribute { }
+
+    [LocalTag]
+    public class LocalTagged { }
 
     // The compiler stores [Serializable] as a flag, not as an attribute row.
     [Serializable]

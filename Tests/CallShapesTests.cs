@@ -8,7 +8,9 @@ namespace Tests;
 /// is written in. The fixture under Tests/Fixtures/CallShapes/ compiles to CallShapes.dll
 /// alongside the shared inspection target; each of its callers makes the same uses of
 /// <c>CallShapes.Target</c> and <c>CallShapes.Widget</c> in a different compiler-generated
-/// shape.
+/// shape. The file also holds the tests on what decompile, list_members and find_methods
+/// answer for the fixture's <c>Settings</c>, <c>Gauge</c> and <c>Callers</c> classes, and the
+/// test on the form every list answer takes when asked with a limit of 0 or less.
 /// </summary>
 public sealed class CallShapesTests : IClassFixture<ILensServerFixture>
 {
@@ -95,6 +97,23 @@ public sealed class CallShapesTests : IClassFixture<ILensServerFixture>
         string text = await CallToolText("analyze", arguments);
 
         Assert.Equal(CallerReferences.Order(), ResultLines(text).Order());
+    }
+
+    [Fact]
+    public async Task Analyze_ExtensionMethods_OnATypeTheAssemblyDefines_ListsThem()
+    {
+        // For a type the assembly defines, ILens answers from the table its lookup of extension
+        // methods reads, for a C# static class's method as for any other.
+        string text = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _callShapesPath,
+            ["type_name"] = "CallShapes.Mailbox",
+            ["kind"] = "extension_methods",
+        });
+
+        Assert.Equal(
+            "1 extension method for CallShapes.Mailbox:\nCallShapes.Stamps.Stamp(Mailbox, string, int)",
+            text);
     }
 
     [Fact]
@@ -198,6 +217,10 @@ public sealed class CallShapesTests : IClassFixture<ILensServerFixture>
         "1 nested type:\n" +
         "  CallShapes.Settings.Section";
 
+    // Left out of Settings' members: the fields _retries and _log, and the static constructor
+    // the compiler writes for Label's initializer.
+    private const string SettingsLeftOut = "\nNot shown: 3 internal or private";
+
     [Fact]
     public async Task ListMembers_ShowsTheDeclarationTheConstructorsTheNestedTypesAndWhatIsObsolete()
     {
@@ -207,7 +230,7 @@ public sealed class CallShapesTests : IClassFixture<ILensServerFixture>
             ["type_name"] = "CallShapes.Settings",
         });
 
-        Assert.Equal(SettingsMembers, text);
+        Assert.Equal(SettingsMembers + SettingsLeftOut, text);
     }
 
     [Fact]
@@ -221,7 +244,8 @@ public sealed class CallShapesTests : IClassFixture<ILensServerFixture>
         });
 
         Assert.Equal(
-            string.Join("\n", SettingsMembers.Split('\n').Take(5)) + "\n... (5 more; raise limit to see all)",
+            string.Join("\n", SettingsMembers.Split('\n').Take(5)) + "\n... (5 more; raise limit to see all)" +
+            SettingsLeftOut,
             text);
     }
 
@@ -261,14 +285,17 @@ public sealed class CallShapesTests : IClassFixture<ILensServerFixture>
     public async Task FindMethods_ListsConstructorsUnderTheirILName()
     {
         // Settings' properties are accessors, which find_methods leaves out, so its constructor
-        // is the one method it lists.
+        // is the one method it lists. The static constructor the compiler writes for Label's
+        // initializer is private.
         string text = await CallToolText("find_methods", new()
         {
             ["assembly"] = _callShapesPath,
             ["type_name"] = "CallShapes.Settings",
         });
 
-        Assert.Equal("1 method:\nCallShapes.Settings..ctor(int) → void", text);
+        Assert.Equal(
+            "1 method:\nCallShapes.Settings..ctor(int) → void\nNot shown: 1 internal or private",
+            text);
     }
 
     [Fact]
@@ -289,6 +316,50 @@ public sealed class CallShapesTests : IClassFixture<ILensServerFixture>
         Assert.Contains(shown, line => line.Contains("<InLocalFunction>"));
         string Reference(string line) => line.StartsWith("static ") ? line["static ".Length..] : line;
         Assert.Equal(hidden.OrderBy(Reference, StringComparer.Ordinal), hidden);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-3)]
+    public async Task EveryListAnswer_AskedWithALimitOfZeroOrLess_IsTheHeaderAndTheTruncationLineWithItsCount(int limit)
+    {
+        // A limit of 0 asks for the count alone, and a negative limit is answered like 0. Each
+        // call below is one form of list answer.
+        string fixtures = Path.GetDirectoryName(_callShapesPath)!;
+        var type = new Dictionary<string, object?>
+        {
+            ["assembly"] = _callShapesPath,
+            ["type_name"] = "CallShapes.Target",
+        };
+        var member = new Dictionary<string, object?>(type) { ["member_name"] = "Record" };
+        var builds = new Dictionary<string, object?>
+        {
+            ["assembly_a"] = Path.Combine(fixtures, "BaseShift.dll"),
+            ["assembly_b"] = Path.Combine(fixtures, "BaseShift2.dll"),
+        };
+        (string Tool, Dictionary<string, object?> Arguments)[] calls =
+        [
+            ("find_types", new() { ["assembly"] = _callShapesPath }),
+            ("find_methods", type),
+            ("list_members", type),
+            ("analyze", new(member) { ["kind"] = "used_by" }),
+            ("analyze", new(member) { ["kind"] = "call_sites" }),
+            ("search_code", new() { ["assembly"] = _callShapesPath, ["regex"] = "Record" }),
+            ("find_harmony_dependencies", new() { ["assembly"] = Path.Combine(fixtures, "HarmonyMod.dll") }),
+            ("compare", builds),
+            ("compare", new(builds) { ["type_name"] = "BaseShift.Generated.ChangedInside" }),
+        ];
+
+        foreach (var (tool, arguments) in calls)
+        {
+            string text = await CallToolText(tool, new(arguments) { ["limit"] = limit });
+
+            string[] lines = text.Split('\n');
+            string answer = $"{tool}: {text}";
+            Assert.True(lines.Length >= 2, answer);
+            Assert.True(int.TryParse(lines[0].Split(' ')[0], out int total) && total > 0, answer);
+            Assert.True(lines[1] == $"... ({total} more; raise limit to see all)", answer);
+        }
     }
 
     /// <summary>The result lines of an <c>analyze</c> response, with its header line dropped.</summary>

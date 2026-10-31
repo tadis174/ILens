@@ -14,11 +14,14 @@ namespace ILens;
 /// for such an enum, and the catch discards the <em>entire</em> argument list —
 /// so <c>[HarmonyPatch(typeof(X), MethodType.Constructor, ...)]</c> decodes to
 /// nothing. This reader uses its own provider whose
-/// <c>GetUnderlyingEnumType</c> simply assumes <c>Int32</c> — correct for
-/// HarmonyLib's <c>MethodType</c> and effectively every attribute enum — so the
-/// decode succeeds. Everything it reads (TypeRefs, the value blob, the
-/// constructor signature) lives in the scanned module itself; the referenced
-/// enum's defining assembly never has to be loaded.
+/// <c>GetUnderlyingEnumType</c> simply assumes <c>Int32</c>, so the decode
+/// succeeds. That is correct for the enums a <c>HarmonyPatch</c> attribute
+/// takes, the only attribute the scanner reads through it: every enum in the
+/// namespace HarmonyLib is an int (checked on Harmony 2.4.1). It is not a
+/// rule for attributes at large, whose enums of other widths
+/// <see cref="AttributeArgumentReader"/> reads. Everything read here (TypeRefs,
+/// the value blob, the constructor signature) lives in the scanned module
+/// itself; the referenced enum's defining assembly never has to be loaded.
 /// </summary>
 public static class LenientAttributeReader
 {
@@ -86,7 +89,12 @@ public static class LenientAttributeReader
     /// Turn a custom-attribute serialized type name into a readable form: strip
     /// the trailing assembly qualifier and rewrite a generic reflection name
     /// (<c>List`1[[Int32, …]]</c>) into angle-bracket form (<c>List&lt;Int32&gt;</c>),
-    /// recursing into type arguments. Best-effort — an unparseable name returns
+    /// recursing into type arguments, with the brackets of an array kept after it, in the order
+    /// the name gives them (<c>List&lt;Int32&gt;[,]</c>). Each class of a nested name takes the
+    /// arguments its count asks for, so a class nested in a generic class keeps its place after
+    /// them: <c>Dictionary`2+Enumerator[[Int32, …],[String, …]]</c> is
+    /// <c>Dictionary&lt;Int32, String&gt;+Enumerator</c>. A name without type arguments keeps its
+    /// counts, <c>Dictionary`2+Enumerator</c>. Best-effort — an unparseable name returns
     /// with just the assembly qualifier stripped.
     /// </summary>
     public static string NormalizeTypeName(string raw)
@@ -95,17 +103,23 @@ public static class LenientAttributeReader
 
         raw = StripAssemblyQualifier(raw.Trim());
 
+        // An array's brackets follow a generic argument list, List`1[[Int32, …]][], so they are
+        // taken off before the list is read and put back after it.
+        var element = WithoutArrayBrackets(raw, out var brackets);
+        if (brackets.Count > 0)
+            return NormalizeTypeName(element) + string.Concat(brackets);
+
         int tick = raw.IndexOf('`');
         if (tick < 0) return raw;
         // The generic type-argument list is a single bracketed group after the
-        // arity: List`1[[Int32, asm]]. The OUTER brackets delimit the list; each
-        // argument is itself bracketed as [AssemblyQualifiedName]. Take the outer
-        // group, split its top-level args, then unwrap and recurse into each.
+        // name's last class: Dictionary`2+Enumerator[[Int32, asm],[String, asm]]. The
+        // outer brackets delimit the list; each argument is itself bracketed as
+        // [AssemblyQualifiedName]. Take the outer group, split its top-level args,
+        // then unwrap and recurse into each.
         int open = raw.IndexOf('[', tick);
         int close = raw.LastIndexOf(']');
         if (open < 0 || close <= open) return raw;
 
-        var baseName = raw.Substring(0, tick);
         var inner = raw.Substring(open + 1, close - (open + 1));
         var args = SplitTopLevel(inner).Select(p =>
         {
@@ -113,8 +127,55 @@ public static class LenientAttributeReader
             if (p.Length >= 2 && p[0] == '[' && p[^1] == ']')
                 p = p.Substring(1, p.Length - 2);
             return NormalizeTypeName(p);
-        });
-        return baseName + "<" + string.Join(", ", args) + ">";
+        }).ToList();
+        return WithArguments(raw.Substring(0, open), args);
+    }
+
+    /// <summary>
+    /// The classes of a nested name, each with the type arguments the count after its name asks
+    /// for in place of the count, since one list names the arguments of every class of the name,
+    /// the outermost class's first: <c>Dictionary`2+Enumerator</c> with Int32 and String is
+    /// <c>Dictionary&lt;Int32, String&gt;+Enumerator</c>. Arguments the counts leave over, which no
+    /// C# compiler writes, go to the innermost class.
+    /// </summary>
+    private static string WithArguments(string name, IReadOnlyList<string> args)
+    {
+        var classes = name.Split('+');
+        var used = 0;
+        for (var i = 0; i < classes.Length; i++)
+        {
+            var tick = classes[i].IndexOf('`');
+            var count = tick >= 0 && int.TryParse(classes[i][(tick + 1)..], out var counted) ? counted : 0;
+            var take = i == classes.Length - 1 ? args.Count - used : Math.Min(count, args.Count - used);
+            if (take <= 0)
+                continue;
+            classes[i] = (tick >= 0 ? classes[i][..tick] : classes[i]) + "<" + string.Join(", ", args.Skip(used).Take(take)) + ">";
+            used += take;
+        }
+        return string.Join("+", classes);
+    }
+
+    /// <summary>
+    /// A reflection name without the brackets of the arrays around its element, which go to
+    /// <paramref name="brackets"/> in the order the name lists them: innermost first, so
+    /// <c>System.Int32[,][]</c> is an array of two-dimensional arrays. A group of brackets holds
+    /// a comma for each dimension past the first, or the <c>*</c> of an array of one dimension
+    /// that need not start at zero; a group that holds a type, as a generic argument list does,
+    /// ends the brackets taken off.
+    /// </summary>
+    internal static string WithoutArrayBrackets(string name, out List<string> brackets)
+    {
+        brackets = [];
+        var end = name.Length;
+        while (end > 0 && name[end - 1] == ']')
+        {
+            var open = name.LastIndexOf('[', end - 1);
+            if (open < 0 || name[(open + 1)..(end - 1)].Any(c => c is not (',' or '*') && !char.IsWhiteSpace(c)))
+                break;
+            brackets.Insert(0, name[open..end]);
+            end = open;
+        }
+        return name[..end];
     }
 
     /// <summary>Drop a top-level <c>, Assembly, Version=…</c> suffix, leaving any

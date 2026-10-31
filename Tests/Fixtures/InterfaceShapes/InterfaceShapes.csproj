@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only fixture: an interface with a member of every shape C# allows in
+    one, each as a method, a property and an event: without a body, with a
+    default implementation, sealed, static, static abstract and static virtual,
+    and public, protected, internal and private. A second interface implements
+    members of its base interface and makes one abstract again, and an abstract
+    class with a class derived from it declares the same shapes as the control.
+    Returns.cs holds overrides that return a more specific type than the member
+    they override, in a namespace of its own. It targets .NET 10, since the
+    compiler refuses default implementations, static abstract members and such
+    overrides for netstandard2.0, which the other fixtures target. Not consumed
+    by Tests' source code; only its compiled output is inspected by the ILens
+    server during the e2e suite.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+</Project>

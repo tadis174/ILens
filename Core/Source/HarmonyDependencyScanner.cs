@@ -11,17 +11,30 @@ namespace ILens;
 /// caller needs to ask "do my patches still bind on game version X?":
 /// every patch target, from <c>[HarmonyPatch]</c> attributes, from
 /// <c>TargetMethod</c>/<c>TargetMethods</c> bodies and from calls to Harmony.Patch,
-/// every field the assembly looks up by reflection in any class, and every field
-/// Harmony hands a patch method through a <c>___name</c> parameter. The scan
-/// returns records, and <c>find_harmony_dependencies</c> writes each as one line
-/// of text.
+/// every target named where Harmony applies no patch, every field the assembly
+/// looks up by reflection in any class, every field Harmony hands a patch method
+/// through a <c>___name</c> parameter, every method, property and constructor
+/// of another assembly's class that it looks up by reflection, and every method of
+/// one that Harmony hands a patch method as a delegate. The scan returns
+/// records, and <c>find_harmony_dependencies</c> writes them as lines of text,
+/// printing a line several records give once.
 ///
 /// Patch methods and target resolvers are found as Harmony finds them, by their
 /// name or by their marker attribute, and each patch method binds to its own
 /// target: the class's <c>[HarmonyPatch]</c> with the method's own laid over it.
 ///
+/// A target named where Harmony applies no patch is listed with <see cref="Unapplied"/>
+/// in place of the patch kind: the target of a method whose own <c>[HarmonyPatch]</c>,
+/// laid over its class's, names one but whose name and attributes make it no patch
+/// method, such as one named NewThingPostfix, and a target a class without a patch
+/// method names itself. Harmony never looks up the target of such a method or of such a
+/// class's attribute, so a patch its author meant never applies; it does run such a
+/// class's TargetMethod, and a missing target then stops the mod's PatchAll. A class that
+/// patches nothing and names no target, such as a container of nested patch classes,
+/// gives no line.
+///
 /// Attribute-based bindings are read directly from metadata. TargetMethod and
-/// TargetMethods bodies, Harmony.Patch calls and field lookups are found in the IL
+/// TargetMethods bodies, Harmony.Patch calls and lookups are found in the IL
 /// and read from the decompiler's syntax trees by <see cref="HarmonyValueReader"/>,
 /// which follows a value back to where the assembly writes it.
 /// </summary>
@@ -31,13 +44,21 @@ public sealed class HarmonyDependencyScanner
 
     // The patch types, in the order Harmony tries them: a method is of the first type it is
     // named after or marked with, as [HarmonyPrefix] marks a prefix. Harmony 2.4 also tries
-    // InnerPrefix and InnerPostfix, which patch a call inside the target; 2.4.1 has neither an
+    // InnerPrefix and InnerPostfix, which patch a call inside the target; 2.4 has neither an
     // attribute nor a HarmonyMethod field that names that call, so a line could not say what
-    // one patches.
+    // one patches. The release candidates of 3.0 add HarmonyMethod fields that name it, which
+    // the scanner does not read.
     private static readonly string[] PatchTypes =
     {
         "Prefix", "Postfix", "Transpiler", "Finalizer", "ReversePatch"
     };
+
+    // The inner patch types named above. A method of one gets no line, but it is a patch method to
+    // Harmony and so is not unapplied.
+    private static readonly string[] InnerPatchTypes = { "InnerPrefix", "InnerPostfix" };
+
+    /// <summary>The word that stands in place of the patch kind for a target Harmony applies no patch to.</summary>
+    public const string Unapplied = "Unapplied";
 
     // The patch types of Harmony.Patch's arguments after the original, in their order.
     private static readonly string[] PatchCallTypes = { "Prefix", "Postfix", "Transpiler", "Finalizer" };
@@ -61,15 +82,19 @@ public sealed class HarmonyDependencyScanner
     private readonly AssemblyHost _host;
     private readonly HarmonyValueReader _reader;
 
+    // The lookup calls whose results the patch lines show as targets, which get no line of their own.
+    private readonly HashSet<HarmonyValueReader.Origin> _shownLookups = new();
+
     public HarmonyDependencyScanner(AssemblyHost host)
     {
         _host = host;
-        _reader = new HarmonyValueReader(host);
+        _reader = new HarmonyValueReader(host, DelegateTarget);
     }
 
     /// <summary>
     /// A patch target, with <c>MethodType</c> the kind of method patched when <c>TargetMember</c>
-    /// does not show it, such as Enumerator, and otherwise null.
+    /// does not show it, such as Enumerator, and otherwise null. <c>PatchType</c> is
+    /// <see cref="Unapplied"/> for a target Harmony applies no patch to.
     /// </summary>
     public sealed record Patch(
         string TargetType,
@@ -86,28 +111,58 @@ public sealed class HarmonyDependencyScanner
         string Accessor,
         string PatchSite);
 
+    /// <summary>
+    /// A method, property, event or constructor looked up by reflection: the first word of its
+    /// line, Method, Property, Event or Member, the class and the member, each null where not read,
+    /// the parameter types that pin an overload, and the label naming the lookup call.
+    /// </summary>
+    public sealed record MemberLookup(
+        string Word,
+        string ContextType,
+        string MemberName,
+        IReadOnlyList<string> ParamTypes,
+        string Label,
+        string Site);
+
     public sealed record ScanResult(
         IReadOnlyList<Patch> Patches,
-        IReadOnlyList<FieldAccess> FieldAccesses);
+        IReadOnlyList<FieldAccess> FieldAccesses,
+        IReadOnlyList<MemberLookup> MemberLookups);
+
+    /// <summary>
+    /// The method a delegate type's Harmony attributes name: the class, null where they name none,
+    /// the member, and the parameter types where they pin an overload.
+    /// </summary>
+    public sealed record DelegateMethod(string Class, string Member, IReadOnlyList<string> ParameterTypes);
 
     public ScanResult Scan()
     {
         var patches = new List<Patch>();
         var fieldAccesses = new List<FieldAccess>();
+        var memberLookups = new List<MemberLookup>();
 
         foreach (var type in _host.TypeSystem.MainModule.TypeDefinitions)
-            ProcessPatchClass(type, patches, fieldAccesses);
-        ScanPatchCalls(patches, fieldAccesses);
+            ProcessPatchClass(type, patches, fieldAccesses, memberLookups);
+        var passed = ScanPatchCalls(patches, fieldAccesses, memberLookups);
+        // A method a Harmony.Patch call passes is applied by hand, whatever its own [HarmonyPatch] says.
+        patches.RemoveAll(patch => patch.PatchType == Unapplied && passed.Contains(patch.PatchSite));
         ScanFieldLookups(fieldAccesses);
+        // Last, since it leaves out the lookups the patch lines above show as targets.
+        ScanMemberLookups(memberLookups);
 
-        return new ScanResult(patches, fieldAccesses);
+        return new ScanResult(patches, fieldAccesses, memberLookups);
     }
 
     private void ProcessPatchClass(
-        ITypeDefinition type, List<Patch> patches, List<FieldAccess> fieldAccesses)
+        ITypeDefinition type, List<Patch> patches, List<FieldAccess> fieldAccesses, List<MemberLookup> memberLookups)
     {
+        // A delegate type's Harmony attributes name the method Harmony hands a patch as that
+        // delegate. Harmony's PatchAll finds no patch method in such a type, so they name no target.
+        if (type.Kind == TypeKind.Delegate)
+            return;
+
         // Every type is looked at, so each method's Harmony attributes are read once.
-        var methods = type.Methods
+        var methods = type.DeclaredMethods()
             .Select(method => (Method: method, HarmonyAttributes: HarmonyAttributesOf(method)))
             .ToList();
         var targetMethodMethod = FindTargetResolver(methods, "TargetMethod");
@@ -118,18 +173,25 @@ public sealed class HarmonyDependencyScanner
                 NamesTarget: method.HarmonyAttributes.Contains("HarmonyPatch")))
             .Where(patchMethod => patchMethod.PatchType != null)
             .ToList();
+        // The methods whose own [HarmonyPatch] may name a target that Harmony never applies, since
+        // their name and attributes make them no patch method.
+        var unappliedMethods = methods
+            .Where(method => method.HarmonyAttributes.Contains("HarmonyPatch")
+                && PatchTypeOf(method.Method, method.HarmonyAttributes) == null
+                && !IsInnerPatch(method.Method, method.HarmonyAttributes))
+            .Select(method => method.Method)
+            .ToList();
 
-        // A class counts through its patch methods' own [HarmonyPatch] too, since that may be
-        // all that names its targets: on a class carrying only a category, or one applied by
-        // hand without any class attribute.
+        // A class counts through its methods' own [HarmonyPatch] too, since that may be all that
+        // names its targets: on a class carrying only a category, or one applied by hand without
+        // any class attribute.
         var classTarget = ReadTargetSpec(type);
         bool isPatchClass = classTarget != null
             || hasBodyResolver
-            || patchMethods.Any(patchMethod => patchMethod.NamesTarget);
+            || patchMethods.Any(patchMethod => patchMethod.NamesTarget)
+            || unappliedMethods.Count > 0;
         if (!isPatchClass) return;
 
-        if (patchMethods.Count == 0)
-            patchMethods.Add(("(none)", null, false));
         var firstPatch = patches.Count;
 
         // An empty [HarmonyPatch] paired with TargetMethod/TargetMethods is the
@@ -144,6 +206,27 @@ public sealed class HarmonyDependencyScanner
             patches.Add(BuildPatchFromAttribute(target, patchType, patchSite, type));
         }
 
+        // An unapplied target is listed only where it names a class, so that a '?' keeps meaning
+        // that the scan could not read a target Harmony looks up.
+        var unappliedLines = 0;
+        foreach (var method in unappliedMethods)
+        {
+            var target = Merge(classTarget, ReadTargetSpec(method));
+            if (target.TargetType == null)
+                continue;
+            patches.Add(BuildPatchFromAttribute(target, Unapplied, method, type));
+            unappliedLines++;
+        }
+
+        // A class without a patch method lists the targets it names itself, under its own name: those
+        // its TargetMethod or TargetMethods gives, and otherwise the one its [HarmonyPatch] names,
+        // unless a method's line above carries it, merged with the method's own.
+        var sites = patchMethods.Count > 0
+            ? patchMethods.Select(patchMethod => (patchMethod.PatchType, patchMethod.Method)).ToList()
+            : [(Unapplied, (IMethod)null)];
+        if (patchMethods.Count == 0 && !hasBodyResolver && unappliedLines == 0 && classTarget?.TargetType != null)
+            patches.Add(BuildPatchFromAttribute(classTarget, Unapplied, null, type));
+
         if (targetMethodMethod != null)
         {
             var resolved = ResolveTargetMethodBody(targetMethodMethod);
@@ -154,20 +237,22 @@ public sealed class HarmonyDependencyScanner
                 : resolved[0].Searched ? "TargetMethodSearch"
                 : "TargetMethod";
             foreach (var rt in resolved)
-                foreach (var (patchType, patchSite, _) in patchMethods)
+                foreach (var (patchType, patchSite) in sites)
                     patches.Add(BuildPatchFromBody(rt, kind, patchType, patchSite, type));
         }
 
         if (targetMethodsMethod != null)
         {
             foreach (var rt in ResolveTargetMethodBody(targetMethodsMethod))
-                foreach (var (patchType, patchSite, _) in patchMethods)
+                foreach (var (patchType, patchSite) in sites)
                     patches.Add(BuildPatchFromBody(
                         rt, rt.Searched ? "TargetMethodsSearch" : "TargetMethods", patchType, patchSite, type));
         }
 
         AddInjectedFields(type, patchMethods.Select(patchMethod => (patchMethod.PatchType, patchMethod.Method)),
             patches.Skip(firstPatch).ToList(), fieldAccesses);
+        foreach (var (patchType, method, _) in patchMethods)
+            memberLookups.AddRange(InjectedDelegates(method, patchType, $"{ReferenceFormatter.FormatTypeName(type)}.{method.Name}"));
     }
 
     /// <summary>
@@ -205,6 +290,56 @@ public sealed class HarmonyDependencyScanner
     }
 
     /// <summary>
+    /// The methods Harmony hands a prefix, postfix or finalizer as delegates, labeled Injected, each
+    /// once. Harmony gives a parameter a delegate to the method its type's Harmony attributes name,
+    /// see <see cref="DelegateTarget"/>, where the parameter's name is none of Harmony's own, all of
+    /// which start with __, and fails the patch where that method is missing. A postfix that returns
+    /// the type of its first parameter is handed the result there instead. Harmony first gives a
+    /// parameter named like one of the patched method's, or mapped to one by [HarmonyArgument], that
+    /// argument. The scan does not compare the names: only a method of this assembly can take a
+    /// delegate type it defines, and a patch of another assembly's method that names a parameter so
+    /// breaks either way. A method of a class the scanned assembly defines, a constructed generic
+    /// class included, gives no line, as no lookup of one does.
+    /// </summary>
+    private IEnumerable<MemberLookup> InjectedDelegates(IMethod method, string patchType, string site)
+    {
+        if (patchType is not ("Prefix" or "Postfix" or "Finalizer"))
+            return [];
+        var parameters = method.Parameters.AsEnumerable();
+        if (patchType == "Postfix" && method.Parameters.Count > 0 && !method.ReturnType.IsKnownType(KnownTypeCode.Void)
+            && method.Parameters[0].Type.ReflectionName == method.ReturnType.ReflectionName)
+            parameters = parameters.Skip(1);
+        return parameters
+            .Where(parameter => !parameter.Name.StartsWith("__", StringComparison.Ordinal))
+            .Select(parameter => parameter.Type.GetDefinition() is { } type ? DelegateTarget(type) : null)
+            .Where(target => target is not null && (target.Class is null || _host.Resolver.DefinitionOf(target.Class) is null))
+            .Select(target => new MemberLookup("Method", target.Class, target.Member, target.ParameterTypes, "Injected", site))
+            .DistinctBy(lookup => KeyOf(lookup));
+    }
+
+    /// <summary>
+    /// The method a delegate type's [HarmonyDelegate] and [HarmonyPatch] attributes name, merged as
+    /// for a patch and named as a patch's target is, which Harmony reads the same way for a delegate
+    /// type, [HarmonyDelegate] deriving from [HarmonyPatch]. Null for a type that is no delegate type
+    /// or carries no such attribute, and for one another assembly defines: ILens's type system does
+    /// not tell such a type from any other class of that assembly, and where the decompiler's holds
+    /// it, as for a type argument, the lenient reader could not read its attributes, which it reads
+    /// from the scanned file alone.
+    /// </summary>
+    private DelegateMethod DelegateTarget(ITypeDefinition type)
+    {
+        if (type.Kind != TypeKind.Delegate || type.ParentModule?.AssemblyName != _host.TypeSystem.MainModule.AssemblyName
+            || ReadTargetSpec(type) is not { } spec)
+            return null;
+        var named = NamePatchedMethod(spec);
+        return new DelegateMethod(named.TargetType, named.TargetMember, named.ParamTypes);
+    }
+
+    private static string KeyOf(MemberLookup lookup) =>
+        string.Join("\n", lookup.Word, lookup.ContextType, lookup.MemberName,
+            lookup.ParamTypes is null ? "-" : string.Join(",", lookup.ParamTypes), lookup.Label, lookup.Site);
+
+    /// <summary>
     /// The patches the assembly applies by calling Harmony.Patch. Each call gives one line for each
     /// patch method it passes, as prefix, postfix, transpiler or finalizer by the argument's position,
     /// and each target it names, read in each frame its member is read in. The label names the member
@@ -213,9 +348,11 @@ public sealed class HarmonyDependencyScanner
     /// patch is never left out unseen. The ___name parameters of the prefixes, postfixes and
     /// finalizers these calls pass are listed as attribute patches' are. PatchProcessor is not read:
     /// its one use in the workshop corpus re-applies the patches a method already has and names no
-    /// patch method.
+    /// patch method. The methods Harmony hands those patch methods as delegates are listed as for
+    /// attribute patches too. Returns the patch methods the calls pass, named as a line's site names
+    /// them.
     /// </summary>
-    private void ScanPatchCalls(List<Patch> patches, List<FieldAccess> fieldAccesses)
+    private IReadOnlySet<string> ScanPatchCalls(List<Patch> patches, List<FieldAccess> fieldAccesses, List<MemberLookup> memberLookups)
     {
         var callPatches = new List<Patch>();
         var patchMethods = new Dictionary<string, HarmonyValueReader.PatchMethodValue>(StringComparer.Ordinal);
@@ -234,6 +371,7 @@ public sealed class HarmonyDependencyScanner
         patches.AddRange(callPatches);
 
         var listed = fieldAccesses.ToHashSet();
+        var listedDelegates = memberLookups.Select(lookup => KeyOf(lookup)).ToHashSet(StringComparer.Ordinal);
         foreach (var group in callPatches.Where(patch => patch.PatchType is "Prefix" or "Postfix" or "Finalizer")
                      .GroupBy(patch => patch.PatchSite))
         {
@@ -241,10 +379,16 @@ public sealed class HarmonyDependencyScanner
                 || patchMethod.Class.Type?.GetDefinition() is not { } patchClass)
                 continue;
             var injected = new List<FieldAccess>();
-            foreach (var method in patchClass.Methods.Where(method => method.Name == patchMethod.Name))
+            var methods = patchClass.DeclaredMethods().Where(method => method.Name == patchMethod.Name).ToList();
+            foreach (var method in methods)
                 AddInjectedFields(method, group.Key, group, injected);
             fieldAccesses.AddRange(injected.Distinct().Where(listed.Add));
+            foreach (var patchType in group.Select(patch => patch.PatchType).Distinct())
+                foreach (var method in methods)
+                    memberLookups.AddRange(InjectedDelegates(method, patchType, group.Key)
+                        .Where(lookup => listedDelegates.Add(KeyOf(lookup))));
         }
+        return patchMethods.Keys.ToHashSet(StringComparer.Ordinal);
     }
 
     private static bool IsPatchCall(string type, string name) =>
@@ -279,8 +423,10 @@ public sealed class HarmonyDependencyScanner
                         patchMethods.TryAdd(site, known);
                     foreach (var target in targets)
                     {
+                        if (target is HarmonyValueReader.MethodValue shown)
+                            _shownLookups.UnionWith(shown.Origins);
                         var line = target is HarmonyValueReader.MethodValue found
-                            ? new Patch(found.Type.Name, found.Name, found.ParameterTypes, found.MethodType, PatchCallTypes[position - 1],
+                            ? new Patch(found.Type.Name, found.Member, found.ParameterTypes, found.MethodType, PatchCallTypes[position - 1],
                                 $"{(found.Searched ? "PatchCallSearch" : "PatchCall")} in {origin}", site)
                             : new Patch("?", null, null, null, PatchCallTypes[position - 1], $"PatchCall in {origin}", site);
                         if (seen.Add(KeyOf(line)))
@@ -301,10 +447,11 @@ public sealed class HarmonyDependencyScanner
         $"{ReferenceFormatter.FormatTypeName(member.DeclaringTypeDefinition)}.{member.Name}";
 
     /// <summary>
-    /// Every field the assembly looks up by reflection, in any class. The members whose IL, or the IL
-    /// of code the compiler generated for them, calls a field lookup are decompiled, and each lookup is
-    /// read from the syntax tree. A call the IL shows that the tree does not, as when a member cannot be
-    /// decompiled, is listed with '?' for its class and field, so a field is never left out unseen.
+    /// Every field the assembly looks up by reflection or names to a transpiler's helpers, in any
+    /// class. The members whose IL, or the IL of code the compiler generated for them, calls a field
+    /// lookup are decompiled, and each lookup is read from the syntax tree. A call the IL shows that
+    /// the tree does not, as when a member cannot be decompiled, is listed with '?' for its class and
+    /// field, so a field is never left out unseen.
     /// </summary>
     private void ScanFieldLookups(List<FieldAccess> output)
     {
@@ -323,10 +470,36 @@ public sealed class HarmonyDependencyScanner
     }
 
     /// <summary>
+    /// Every method, property, event and constructor the assembly looks up by reflection or names to
+    /// a transpiler's helpers, in any class, found and read as <see cref="ScanFieldLookups"/> finds
+    /// and reads the fields. A lookup that names a member of a class the scanned assembly defines is
+    /// left out, and so is one whose result a patch line shows as its target. A call the IL shows
+    /// that the tree does not is listed with nothing read, so a member is never left out unseen.
+    /// </summary>
+    private void ScanMemberLookups(List<MemberLookup> output)
+    {
+        foreach (var (member, calls) in _host.MembersCalling(HarmonyValueReader.IsMemberLookup))
+        {
+            var site = SiteOf(member);
+            var (lookups, found) = _reader.Tree(member) is { } tree
+                ? MemberLookupReader.Read(_reader, member, tree, _shownLookups)
+                : ([], []);
+            output.AddRange(lookups.Select(lookup =>
+                new MemberLookup(lookup.Word, lookup.Class, lookup.Member, lookup.ParameterTypes, lookup.Label, site)));
+
+            var unseen = calls.GroupBy(call => call)
+                .SelectMany(group => Enumerable.Repeat(group.Key, Math.Max(0, group.Count() - found.Count(call => call == group.Key))));
+            output.AddRange(unseen.Select(call =>
+                new MemberLookup(HarmonyValueReader.WordOf(call), null, null, null, HarmonyValueReader.LabelOf(call), site)));
+        }
+    }
+
+    /// <summary>
     /// The target named by the <c>[HarmonyPatch]</c> attributes on a patch class or a patch
-    /// method, or null when it carries none. Harmony lets one target be split across several
-    /// attributes (e.g. <c>[HarmonyPatch(typeof(X))] [HarmonyPatch("Y")]</c>), so the
-    /// arguments are combined by their type rather than by attribute.
+    /// method, or by those and <c>[HarmonyDelegate]</c> on a delegate type, or null when it carries
+    /// none. Harmony lets one target be split across several attributes (e.g.
+    /// <c>[HarmonyPatch(typeof(X))] [HarmonyPatch("Y")]</c>), so the arguments are combined by
+    /// their type rather than by attribute.
     /// </summary>
     private TargetSpec ReadTargetSpec(IEntity owner)
     {
@@ -335,7 +508,7 @@ public sealed class HarmonyDependencyScanner
 
         foreach (var attr in owner.GetAttributes())
         {
-            if (!IsHarmonyAttribute(attr.AttributeType, "HarmonyPatch")) continue;
+            if (!NamesTarget(attr.AttributeType.Namespace + "." + attr.AttributeType.Name)) continue;
 
             spec ??= new TargetSpec();
             // The high-level decoder empties FixedArguments when an argument's
@@ -378,19 +551,27 @@ public sealed class HarmonyDependencyScanner
     /// The target with its patched method named as the other tools take it, and without its
     /// method type once the name shows it. A getter, setter or event accessor patch names the
     /// property or event and binds its accessor. A constructor patch without argument types binds
-    /// the parameterless constructor, as AccessTools.DeclaredConstructor does with none.
+    /// the parameterless constructor, as AccessTools.DeclaredConstructor does with none. The argument
+    /// types stay where Harmony's GetOriginalMethod reads them: it binds a static constructor, a
+    /// finalizer and an accessor named by its property or event without them, in every build from 2.0
+    /// to 3.0 that has the kind, so such a target names no overload whatever its attribute carries.
     /// </summary>
     private TargetSpec NamePatchedMethod(TargetSpec spec) =>
         MethodNamedByKind(spec.MethodType) is { } method
-            ? Named(spec, method) with { ParamTypes = spec.MethodType == "Constructor" ? spec.ParamTypes ?? [] : spec.ParamTypes }
+            ? Named(spec, method, spec.MethodType switch
+            {
+                "Constructor" => spec.ParamTypes ?? [],
+                "StaticConstructor" or "Finalizer" => null,
+                _ => spec.ParamTypes,
+            })
         : IsIndexerPatch(spec) ? NameIndexerAccessor(spec)
         : spec.MethodType switch
         {
             "Normal" => spec with { MethodType = null },
-            "Getter" => Named(spec, "get_" + spec.TargetMember),
-            "Setter" => Named(spec, "set_" + spec.TargetMember),
-            "EventAdd" when spec.TargetMember != null => Named(spec, "add_" + spec.TargetMember),
-            "EventRemove" when spec.TargetMember != null => Named(spec, "remove_" + spec.TargetMember),
+            "Getter" => Named(spec, "get_" + spec.TargetMember, null),
+            "Setter" => Named(spec, "set_" + spec.TargetMember, null),
+            "EventAdd" when spec.TargetMember != null => Named(spec, "add_" + spec.TargetMember, null),
+            "EventRemove" when spec.TargetMember != null => Named(spec, "remove_" + spec.TargetMember, null),
             _ => spec,
         };
 
@@ -410,9 +591,8 @@ public sealed class HarmonyDependencyScanner
     /// </summary>
     private TargetSpec NameIndexerAccessor(TargetSpec spec)
     {
-        var (types, _) = _host.Resolver.FindTypes(spec.TargetType);
-        var indexers = types.Count == 1
-            ? types[0].Properties.Where(property => property.IsIndexer).ToList()
+        var indexers = _host.Resolver.DefinitionOf(spec.TargetType) is { } type
+            ? type.Properties.Where(property => property.IsIndexer).ToList()
             : new List<IProperty>();
         var indexer = spec.ParamTypes == null
             ? indexers.Count == 1 ? indexers[0] : null
@@ -424,11 +604,11 @@ public sealed class HarmonyDependencyScanner
         var parameters = setter && spec.ParamTypes != null
             ? spec.ParamTypes.Append(indexer == null ? "?" : ReferenceFormatter.FormatTypeRef(indexer.ReturnType)).ToList()
             : spec.ParamTypes;
-        return Named(spec, name) with { ParamTypes = parameters };
+        return Named(spec, name, parameters);
     }
 
-    private static TargetSpec Named(TargetSpec spec, string method) =>
-        spec with { TargetMember = method, MethodType = null };
+    private static TargetSpec Named(TargetSpec spec, string method, List<string> parameterTypes) =>
+        spec with { TargetMember = method, MethodType = null, ParamTypes = parameterTypes };
 
     /// <summary>
     /// The method a method type names by itself, or null for one that needs a member name. Harmony
@@ -445,16 +625,16 @@ public sealed class HarmonyDependencyScanner
     };
 
     /// <summary>
-    /// Recover <c>[HarmonyPatch]</c> targets that ILSpy's high-level decoder
-    /// dropped — the <c>MethodType</c>-bearing overloads — by reading the raw
-    /// attribute blob via <see cref="LenientAttributeReader"/>. Merges into the
+    /// Recover <c>[HarmonyPatch]</c> and <c>[HarmonyDelegate]</c> targets that ILSpy's high-level
+    /// decoder dropped — the overloads that take <c>MethodType</c> or <c>MethodDispatchType</c> —
+    /// by reading the raw attribute blob via <see cref="LenientAttributeReader"/>. Merges into the
     /// same <see cref="TargetSpec"/> the high-level pass populates.
     /// </summary>
     private void AbsorbLenientHarmonyAttributes(TargetSpec spec, IEntity owner)
     {
         foreach (var decoded in _host.ReadCustomAttributesLenient(owner))
         {
-            if (decoded.AttributeTypeName != "HarmonyLib.HarmonyPatch") continue;
+            if (!NamesTarget(decoded.AttributeTypeName)) continue;
 
             // HarmonyPatch(string typeName, string methodName, MethodType) is the one constructor
             // that takes two strings, and Harmony looks the first up with AccessTools.TypeByName.
@@ -498,49 +678,99 @@ public sealed class HarmonyDependencyScanner
     /// A type name read from an attribute blob, written as ILens writes types, with '.' for
     /// nesting rather than '+'. A <paramref name="qualified"/> name is written as
     /// <see cref="ReferenceFormatter.FormatTypeName(IType)"/> writes a type's name, with its
-    /// namespace and qualified type arguments, <c>List&lt;System.Int32&gt;</c>; otherwise as a
-    /// parameter type is written, by its keyword or short name, <c>List&lt;int&gt;</c>.
+    /// namespace, <c>System.Collections.Generic.List&lt;int&gt;</c>, a nested class with the
+    /// classes enclosing it, and a generic class without type arguments in C#'s unbound form,
+    /// <c>System.Collections.Generic.Dictionary&lt;,&gt;.Enumerator</c>; otherwise as
+    /// <see cref="ReferenceFormatter.FormatTypeRef(IType)"/> writes a parameter type, by its
+    /// keyword or short name, <c>List&lt;int&gt;</c>, a nested class with the classes enclosing it
+    /// where one of them has type arguments, <c>Dictionary&lt;int, string&gt;.Enumerator</c>, and by
+    /// its own name otherwise, a generic class without type arguments by its name alone, and a
+    /// nullable value type as <c>int?</c>. Type arguments are written as parameter types are either
+    /// way, each class's after its own name. An array
+    /// is written as <see cref="ReferenceFormatter.FormatTypeRef(IType)"/> writes one, with its
+    /// dimensions and the outermost array's brackets first, where a reflection name lists them
+    /// innermost first: <c>System.Int32[,][]</c> is <c>int[][,]</c>.
     /// </summary>
     private static string CSharpTypeName(string name, bool qualified)
     {
         if (string.IsNullOrEmpty(name))
             return name;
-        if (name.EndsWith("[]", StringComparison.Ordinal))
-            return CSharpTypeName(name[..^2], qualified) + "[]";
+        var element = LenientAttributeReader.WithoutArrayBrackets(name, out var brackets);
+        if (brackets.Count > 0)
+        {
+            // "[*]" is an array of one dimension that need not start at zero, which C# cannot
+            // write and the decompiler writes as "[]".
+            var csharp = brackets.AsEnumerable().Reverse().Select(group => "[" + new string(',', group.Count(c => c == ',')) + "]");
+            return CSharpTypeName(element, qualified) + string.Concat(csharp);
+        }
 
-        var open = name.IndexOf('<');
-        var arguments = open < 0 ? "" : "<" + string.Join(", ",
-            SplitTypeArguments(name[(open + 1)..^1]).Select(argument => CSharpTypeName(argument, qualified))) + ">";
-        var bare = open < 0 ? name : name[..open];
-
-        var nesting = bare.Split('+');
-        var dot = nesting[0].LastIndexOf('.');
-        var @namespace = dot < 0 ? "" : nesting[0][..dot];
-        var outer = dot < 0 ? nesting[0] : nesting[0][(dot + 1)..];
-        if (!qualified && nesting.Length == 1 && arguments.Length == 0
-            && ReferenceFormatter.KeywordFor(@namespace, outer) is { } keyword)
+        var classes = SplitOutsideArguments(name, '+').Select(NamedClass.Read).ToList();
+        var dot = classes[0].Name.LastIndexOf('.');
+        var @namespace = dot < 0 ? "" : classes[0].Name[..dot];
+        classes[0] = classes[0] with { Name = classes[0].Name[(dot + 1)..] };
+        var own = classes[^1];
+        if (!qualified && classes.Count == 1 && own.Count == 0 && own.Arguments.Count == 0
+            && ReferenceFormatter.KeywordFor(@namespace, own.Name) is { } keyword)
             return keyword;
+        if (!qualified && classes.Count == 1 && own.Arguments.Count == 1 && (@namespace, own.Name) is ("System", "Nullable"))
+            return own.Arguments[0] + "?";
 
-        var nested = string.Join(".", nesting.Skip(1).Prepend(outer));
-        return (qualified && @namespace.Length > 0 ? @namespace + "." : "") + nested + arguments;
+        if (qualified)
+            return (@namespace.Length > 0 ? @namespace + "." : "") + string.Join(".", classes.Select(named => named.Write(unbound: true)));
+        return classes.SkipLast(1).Any(named => named.Arguments.Count > 0)
+            ? string.Join(".", classes.Select(named => named.Write(unbound: false)))
+            : own.Write(unbound: false);
     }
 
-    /// <summary>The type arguments of a generic name, split at the commas between them.</summary>
-    private static IEnumerable<string> SplitTypeArguments(string list)
+    /// <summary>
+    /// One class of a name <see cref="CSharpTypeName"/> reads: its name, the count of type
+    /// parameters its name carries where no type arguments follow it, and its type arguments, each
+    /// written as a parameter type is.
+    /// </summary>
+    private sealed record NamedClass(string Name, int Count, IReadOnlyList<string> Arguments)
+    {
+        public static NamedClass Read(string text)
+        {
+            var open = text.IndexOf('<');
+            if (open >= 0)
+                return new NamedClass(text[..open], 0, SplitOutsideArguments(text[(open + 1)..^1], ',')
+                    .Select(argument => CSharpTypeName(argument, qualified: false)).ToList());
+            var tick = text.IndexOf('`');
+            return tick >= 0 && int.TryParse(text[(tick + 1)..], out var count)
+                ? new NamedClass(text[..tick], count, [])
+                : new NamedClass(text, 0, []);
+        }
+
+        /// <summary>
+        /// The class with its type arguments, or, where its name counts type parameters and no
+        /// arguments follow it, in C#'s unbound form when <paramref name="unbound"/>,
+        /// <c>Dictionary&lt;,&gt;</c>, and by its name alone otherwise.
+        /// </summary>
+        public string Write(bool unbound) =>
+            Arguments.Count > 0 ? $"{Name}<{string.Join(", ", Arguments)}>"
+            : unbound && Count > 0 ? $"{Name}<{new string(',', Count - 1)}>"
+            : Name;
+    }
+
+    /// <summary>
+    /// The parts of a name between the <paramref name="separator"/>s outside its angle brackets:
+    /// the classes of a nested name at '+', and the type arguments of a generic one at ','.
+    /// </summary>
+    private static IEnumerable<string> SplitOutsideArguments(string text, char separator)
     {
         var depth = 0;
         var start = 0;
-        for (var i = 0; i < list.Length; i++)
+        for (var i = 0; i < text.Length; i++)
         {
-            if (list[i] == '<') depth++;
-            else if (list[i] == '>') depth--;
-            else if (list[i] == ',' && depth == 0)
+            if (text[i] == '<') depth++;
+            else if (text[i] == '>') depth--;
+            else if (text[i] == separator && depth == 0)
             {
-                yield return list[start..i].Trim();
+                yield return text[start..i].Trim();
                 start = i + 1;
             }
         }
-        yield return list[start..].Trim();
+        yield return text[start..].Trim();
     }
 
     private static bool IsMethodTypeArg(string argType) =>
@@ -604,6 +834,11 @@ public sealed class HarmonyDependencyScanner
         PatchTypes.FirstOrDefault(patchType =>
             method.Name == patchType || harmonyAttributes.Contains("Harmony" + patchType));
 
+    /// <summary>Whether Harmony 2.4 takes a method as a patch of a call inside its target, which gets no line.</summary>
+    private static bool IsInnerPatch(IMethod method, IReadOnlyCollection<string> harmonyAttributes) =>
+        InnerPatchTypes.Any(patchType =>
+            method.Name == patchType || harmonyAttributes.Contains("Harmony" + patchType));
+
     /// <summary>
     /// The method that computes a patch class's targets, TargetMethod or TargetMethods, found as
     /// Harmony finds it: by its <c>[HarmonyTargetMethod]</c> or <c>[HarmonyTargetMethods]</c>
@@ -614,8 +849,12 @@ public sealed class HarmonyDependencyScanner
         methods.FirstOrDefault(method => method.HarmonyAttributes.Contains("Harmony" + name)).Method
         ?? methods.FirstOrDefault(method => method.Method.Name == name).Method;
 
-    private static bool IsHarmonyAttribute(IType type, string name) =>
-        type.Namespace == HarmonyLibNamespace && type.Name == name;
+    /// <summary>
+    /// Whether an attribute, by its full name, names a target: <c>[HarmonyPatch]</c>, and
+    /// <c>[HarmonyDelegate]</c>, which C# lets stand on a delegate type alone.
+    /// </summary>
+    private static bool NamesTarget(string attributeType) =>
+        attributeType is HarmonyLibNamespace + ".HarmonyPatch" or HarmonyLibNamespace + ".HarmonyDelegate";
 
     /// <summary>
     /// The targets a <c>TargetMethod</c> or <c>TargetMethods</c> body returns, as
@@ -638,14 +877,17 @@ public sealed class HarmonyDependencyScanner
             foreach (var value in HarmonyValueReader.Flatten(_reader.Returns(frame)))
             {
                 if (value is HarmonyValueReader.MethodValue target)
+                {
                     targets.Add(target);
+                    _shownLookups.UnionWith(target.Origins);
+                }
                 else if (value is not HarmonyValueReader.NullValue)
                     unread = true;
             }
         }
 
         var resolved = targets.Distinct()
-            .Select(target => new ResolvedTarget(target.Type.Name, target.Name, target.ParameterTypes, target.Searched, target.MethodType))
+            .Select(target => new ResolvedTarget(target.Type.Name, target.Member, target.ParameterTypes, target.Searched, target.MethodType))
             .ToList();
         if (unread || resolved.Count == 0)
             resolved.Add(Unread);
@@ -717,12 +959,11 @@ public sealed class HarmonyDependencyScanner
         var member = NamePatchedMethod(spec).TargetMember;
         if (member == null) return "Attribute";
 
-        // A name several types share cannot be probed, and is no reason to fail the scan.
-        var (matches, _) = _host.Resolver.FindTypes(spec.TargetType);
-        if (matches.Count != 1) return "Attribute";
-        var target = matches[0];
+        // A name that means several types, or a type the scanned assembly only references or
+        // forwards, cannot be probed, and is no reason to fail the scan.
+        if (_host.Resolver.DefinitionOf(spec.TargetType) is not { } target) return "Attribute";
 
-        var isPublic = target.Methods
+        var isPublic = target.DeclaredMethods()
             .Concat(target.Properties.SelectMany(p => new[] { p.Getter, p.Setter }))
             .Concat(target.Events.SelectMany(e => new[] { e.AddAccessor, e.RemoveAccessor }))
             .Any(m => m != null && m.Name == member && m.Accessibility == Accessibility.Public);

@@ -11,11 +11,18 @@ namespace Tests;
 /// ExternalUser fixture uses ExternalLib, whose DLL lands only in the References folder of the
 /// test output. The shared server searches only the top of each allow-root and leaves
 /// ExternalLib's types unresolved; the second server has that folder as an allow-root and
-/// resolves them.
+/// resolves them. A reference the decompiler may not open is one analyze does not read either,
+/// when asked what a method uses.
 /// </summary>
 public sealed class ReferenceResolutionTests
     : IClassFixture<ILensServerFixture>, IClassFixture<ReferencesServerFixture>
 {
+    // The end of what a method that calls into ExternalLib uses, when ExternalLib was not read.
+    private const string LibraryNotRead =
+        "ExternalLib.Vault.Weigh(ref int, ref int)\n" +
+        "Not checked: whether ref on a method of ExternalLib.Vault is out, in or ref readonly; " +
+        "ILens could not load ExternalLib, Version=1.0.0.0";
+
     private readonly ILensServerFixture _shared;
     private readonly ReferencesServerFixture _references;
     private readonly string _testOutput;
@@ -53,7 +60,7 @@ public sealed class ReferenceResolutionTests
     }
 
     [Fact]
-    public async Task Decompile_DoesNotOpenAReferenceThatLinksOutOfTheRoots()
+    public async Task AReferenceThatLinksOutOfTheRoots_IsNotOpened()
     {
         // A file at the top of an allow-root that links to a file outside every root is not
         // opened, as PathGuard refuses a requested path that does. HarmonyLib sits in the same
@@ -90,9 +97,11 @@ public sealed class ReferenceResolutionTests
                     "HarmonyMod.OtherLookupsPatch", "TargetMethods");
                 string shaded = await Decompile(client, Path.Combine(users, "ExternalUser.dll"),
                     "ExternalUser.Consumer", "Shaded");
+                string used = await ByReferenceUseTests.Uses(client, Path.Combine(users, "ExternalUser.dll"));
 
                 Assert.Contains("typeof(TargetA).Method(", lookups);
                 Assert.Contains("Could not decode attribute arguments", shaded);
+                Assert.Contains(LibraryNotRead, used);
             }
         }
         finally
@@ -103,7 +112,7 @@ public sealed class ReferenceResolutionTests
 
     [Fact]
     [SupportedOSPlatform("windows")]
-    public async Task Decompile_LeavesAReferenceItCannotReadUnresolved()
+    public async Task AReferenceTheServerMayNotRead_StaysUnresolved()
     {
         // A reference file the server may not read leaves the reference unresolved, as one it
         // cannot parse does, instead of failing every tool on the assembly that uses it. HarmonyLib
@@ -136,9 +145,11 @@ public sealed class ReferenceResolutionTests
                     "HarmonyMod.OtherLookupsPatch", "TargetMethods");
                 string shaded = await Decompile(client, Path.Combine(users, "ExternalUser.dll"),
                     "ExternalUser.Consumer", "Shaded");
+                string used = await ByReferenceUseTests.Uses(client, Path.Combine(users, "ExternalUser.dll"));
 
                 Assert.Contains("typeof(TargetA).Method(", lookups);
                 Assert.Contains("Could not decode attribute arguments", shaded);
+                Assert.Contains(LibraryNotRead, used);
             }
         }
         finally

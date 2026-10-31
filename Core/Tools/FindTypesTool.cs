@@ -26,16 +26,24 @@ public static class FindTypesTool
         if (byNamespace)
             host.Resolver.RequireNamespace(@namespace);
 
-        var types = host.TypeSystem.MainModule.TypeDefinitions
-            .Where(t => !byNamespace || t.Namespace == @namespace)
-            .Where(t => string.IsNullOrEmpty(name_contains)
-                || t.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase))
-            .Where(t => accessibility.Permits(t.Accessibility))
-            .Where(t => include_compiler_generated || !CompilerGeneratedFilter.IsCompilerGenerated(t))
-            .Select(ReferenceFormatter.FormatTypeName)
-            .Order(StringComparer.Ordinal)
-            .ToList();
+        // The question's own filters come first, so that what the two default filters leave
+        // out of its matches can be counted.
+        var leftOut = new LeftOut();
+        var types = new List<string>();
+        foreach (var t in host.TypeSystem.MainModule.TypeDefinitions)
+        {
+            if (byNamespace && t.Namespace != @namespace)
+                continue;
+            if (!string.IsNullOrEmpty(name_contains)
+                && !t.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (leftOut.Admits(accessibility.Permits(t.Accessibility),
+                    !include_compiler_generated && CompilerGeneratedFilter.IsCompilerGenerated(t)))
+                types.Add(ReferenceFormatter.FormatTypeName(t));
+        }
+        types.Sort(StringComparer.Ordinal);
 
-        return ListOutput.Format(types, limit, Noun.Regular("type"));
+        return ListOutput.Format(types, limit, Noun.Regular("type"),
+            notShown: ListOutput.NotShown(leftOut, accessibility, types.Count == 0));
     }
 }

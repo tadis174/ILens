@@ -1,11 +1,25 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Test-only fixture: types whose base class, interface, accessor bodies or
-    compiler-generated code change between this assembly and its twin,
-    BaseShift2, which compiles the same sources with SHIFTED defined. The
-    language version is the latest, so the generated names include those that
-    newer compilers emit. Not consumed by Tests' source code; only its compiled
+    Test-only fixture: types whose base class, interface, accessor bodies,
+    compiler-generated code, members, overloads or constants' values change between
+    this assembly and its twin, BaseShift2, which compiles the same sources with
+    SHIFTED defined, methods whose name finds another member in each, methods
+    whose bodies change in a few lines, fields whose constructors set them,
+    properties and events only one of the two has, members whose declarations
+    change, names that stand for members of another kind in each, names
+    that stand for other members of one kind in each, a class that fits
+    an extension method's constraints in this assembly alone, interfaces
+    and delegates whose type parameters gain, lose or swap in and out,
+    structs, classes and records that gain or lose readonly, ref or record,
+    members whose declaration names a class that gives way to one of the same
+    name in another namespace beside another change, parameters whose
+    default changes, beside an enum numbered anew under a default, classes
+    whose name stands for a class with other type parameters in the twin,
+    a generic class named like a class of the core library that the twin
+    references, and methods without a body in both, one of them abstract here
+    and extern in the twin. The language version is the latest, so the generated names include
+    those that newer compilers emit. Not consumed by Tests' source code; only its compiled
     output is inspected by the ILens server during the e2e suite.
   -->
 

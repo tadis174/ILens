@@ -24,11 +24,25 @@ namespace ILens;
 /// that call read freed memory. The budget can therefore be exceeded while calls run, such as a
 /// comparison holding one assembly while it loads the other, and an assembly that alone needs
 /// more than the budget is closed whenever the calls on it end.
+///
+/// The registry also owns what outlives a host and is set once for the server: the decompiled
+/// text search_code keeps, which has a share of the budget of its own, and the time a search
+/// may spend decompiling in one call.
 /// </remarks>
 public sealed class AssemblyHostRegistry
 {
     // Memory budget used when --max-total-size is not given.
     private const long DefaultMaxTotalBytes = 200L * 1024 * 1024;
+
+    // The time a search may spend decompiling in one call when --max-search-seconds is not
+    // given. A client built on the MCP SDK's default gives up on a request after 60 s, and a
+    // call needs about 1.5 s beyond its limit to stop, pack and search (measured on a game
+    // assembly of 16 MB); the rest is room for a slower machine.
+    private static readonly TimeSpan DefaultSearchTimeLimit = TimeSpan.FromSeconds(45);
+
+    // The part of the memory budget the texts kept for search_code may take, packed: a quarter,
+    // which at the default holds the texts of four assemblies of 16 MB at 10.5 MB each.
+    private const int SearchShare = 4;
 
     private readonly PathGuard _guard;
     private readonly long _maxTotalBytes;
@@ -38,11 +52,29 @@ public sealed class AssemblyHostRegistry
     private readonly object _lock = new();
     private readonly object _enforceLock = new();  // held while a thread brings the process back under the budget
 
-    public AssemblyHostRegistry(PathGuard guard, long? maxTotalBytes = null)
+    public AssemblyHostRegistry(PathGuard guard, long? maxTotalBytes = null, TimeSpan? searchTimeLimit = null)
     {
         _guard = guard;
         _maxTotalBytes = maxTotalBytes ?? DefaultMaxTotalBytes;
+        SearchTimeLimit = searchTimeLimit ?? DefaultSearchTimeLimit;
+        CodeTexts = new CodeTextStore(_maxTotalBytes / SearchShare);
     }
+
+    /// <summary>The time a search_code call may spend decompiling before it answers how far it came.</summary>
+    public TimeSpan SearchTimeLimit { get; }
+
+    /// <summary>The decompiled text search_code keeps, which outlives the hosts it was read from.</summary>
+    public CodeTextStore CodeTexts { get; }
+
+    /// <summary>
+    /// Hand back to Windows the memory a call needed only while it ran, before its lease is
+    /// released and the budget is read. A search that decompiles builds a type system of its
+    /// own and drops it: several hundred MB that an ordinary collection would keep committed,
+    /// so that the reading would find the process over the budget and close every host no call
+    /// holds for memory that is free already. Measured after such a pass: 0.07 to 0.21 s, down
+    /// to 83 to 174 MB.
+    /// </summary>
+    public void HandBackTransientMemory() => Collect(aggressive: true);
 
     /// <summary>
     /// Validate, then load (or return from cache) the host for an assembly, leased to the

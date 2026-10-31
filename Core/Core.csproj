@@ -5,7 +5,7 @@
     <AssemblyName>ILens</AssemblyName>
     <RootNamespace>ILens</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>11</Version>
+    <Version>12</Version>
     <!-- .NET appends the git commit SHA to AssemblyInformationalVersion by default,
          which makes the binary differ on every commit even when no source changed.
          Two things make that worthless here. The runtime strips the suffix before
@@ -95,8 +95,11 @@
     <!-- 3b. Gate: the end-to-end test suite must pass against the just-published
          single-file exe before the release is staged, bumped, and committed.
          run-test.ps1 is the committed, Claude-skill-independent test workflow;
-         a non-zero exit fails the publish here, before any of that happens. -->
-    <Exec Command="pwsh -NoProfile -File &quot;$(_RepoRoot)Tests\run-test.ps1&quot; -ILensExe &quot;$(_RepoRoot)Build\dist\ILens.exe&quot;" WorkingDirectory="$(_RepoRoot)" />
+         a non-zero exit fails the publish here, before any of that happens.
+         The exit code alone decides: by default Exec also scans the output for
+         lines in MSBuild's error format, and xUnit prints a test case whose
+         parameter is named error as `error : "..."`, which reads as one. -->
+    <Exec Command="pwsh -NoProfile -File &quot;$(_RepoRoot)Tests\run-test.ps1&quot; -ILensExe &quot;$(_RepoRoot)Build\dist\ILens.exe&quot;" WorkingDirectory="$(_RepoRoot)" IgnoreStandardErrorWarningFormat="true" />
     <!-- 4a. Strip incidental files from Distribution -->
     <Delete Files="$(_RepoRoot)Build\dist\$(AssemblyName).pdb" />
     <Delete Files="$(_RepoRoot)Build\dist\$(AssemblyName).xml" />

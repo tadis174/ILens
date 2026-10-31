@@ -21,6 +21,7 @@ public static class ParameterDescriptions
         "full name or C# keyword, and matches the declared type only, not a base or derived one. 'List' " +
         "matches any List<T> and 'List<int>' only that one, a trailing '[]' an array, 'int' also int?, " +
         "and a ref, out or in prefix only a parameter passed by reference.";
+    public const string ReturnType = $"Return-type pattern, matched by the rules of {ParameterNames.ParameterTypes}.";
     public const string Namespace = "Exact namespace, e.g. 'System.IO'; its sub-namespaces are not included.";
     public const string NameContains = "Case-insensitive substring of the name, without namespace or declaring type.";
     public const string Accessibility =
@@ -37,8 +38,12 @@ public static class ParameterDescriptions
 /// </summary>
 public static class ParameterNames
 {
+    public const string MemberName = "member_name";
     public const string ParameterCount = "parameter_count";
     public const string ParameterTypes = "parameter_types";
+    public const string ReturnType = "return_type";
     public const string ParameterName = "parameter_name";
     public const string NonDefaultOnly = "non_default_only";
+    public const string Accessibility = "accessibility";
+    public const string IncludeCompilerGenerated = "include_compiler_generated";
 }

@@ -107,6 +107,25 @@ public sealed class ExplicitMemberTests : IClassFixture<ILensServerFixture>
     }
 
     [Fact]
+    public async Task Analyze_ExposedBy_OnATypeTheAssemblyDefines_ListsTheMembersThatExposeIt()
+    {
+        // For a type the assembly defines, the ILSpyX analyzer answers, and an analyzer that
+        // is passed over answers like one that found nothing. This pins that it runs.
+        string text = await CallToolText("analyze", new()
+        {
+            ["assembly"] = _explicitMembersPath,
+            ["type_name"] = "ExplicitMembers.IShape",
+            ["kind"] = "exposed_by",
+        });
+
+        Assert.Equal(
+            "2 members exposing ExplicitMembers.IShape:\n" +
+            "ExplicitMembers.ShapeUser.Label(IShape)\n" +
+            "ExplicitMembers.ShapeUser.Measure(IShape)",
+            text);
+    }
+
+    [Fact]
     public async Task DecompileMethod_ByTheFullNameOfAnExplicitAccessor_ReachesIt()
     {
         // The accessor's name carries the interface in front of its IL name, as analyze prints
@@ -182,35 +201,35 @@ public sealed class ExplicitMemberTests : IClassFixture<ILensServerFixture>
     }
 
     // A usage question analyze asks about a member of Circle, and the line that names the
-    // interface member code calls instead, or null for an ordinary member.
+    // interface member code can call instead, or null for a member that implements none.
     public static TheoryData<string, string, string?, string?> UsageQuestions => new()
     {
         {
             "Area", "used_by", null,
-            "Explicit implementation: code reaches it only through ExplicitMembers.IShape.Area(); ask about that member for its uses."
+            "Implementation: code can call ExplicitMembers.IShape.Area() instead; ask about that member for its uses."
         },
         {
             "Name", "read_by", null,
-            "Explicit implementation: code reaches it only through ExplicitMembers.IShape.Name; ask about that member for its uses."
+            "Implementation: code can call ExplicitMembers.IShape.Name instead; ask about that member for its uses."
         },
         {
             "Changed", "used_by", null,
-            "Explicit implementation: code reaches it only through ExplicitMembers.IShape.Changed; ask about that member for its uses."
+            "Implementation: code can call ExplicitMembers.IShape.Changed instead; ask about that member for its uses."
         },
         // The interface is in another assembly; its member is still named.
         {
             "Equals", "used_by", "Circle",
-            "Explicit implementation: code reaches it only through System.IEquatable<ExplicitMembers.Circle>.Equals(Circle); " +
+            "Implementation: code can call System.IEquatable<Circle>.Equals(Circle) instead; " +
             "ask about that member for its uses."
         },
         { "Equals", "used_by", "object", null },
         {
             "Area", "call_sites", null,
-            "Explicit implementation: code reaches it only through ExplicitMembers.IShape.Area(); ask about that member for its uses."
+            "Implementation: code can call ExplicitMembers.IShape.Area() instead; ask about that member for its uses."
         },
         {
             "get_Name", "call_sites", null,
-            "Explicit implementation: code reaches it only through ExplicitMembers.IShape.get_Name(); ask about that member for its uses."
+            "Implementation: code can call ExplicitMembers.IShape.get_Name() instead; ask about that member for its uses."
         },
         { "Equals", "call_sites", null, null },
     };
@@ -233,7 +252,7 @@ public sealed class ExplicitMemberTests : IClassFixture<ILensServerFixture>
         string[] lines = (await CallToolText("analyze", arguments)).Split('\n');
 
         if (route is null)
-            Assert.DoesNotContain(lines, line => line.StartsWith("Explicit implementation", StringComparison.Ordinal));
+            Assert.DoesNotContain(lines, line => line.StartsWith("Implementation:", StringComparison.Ordinal));
         else
             Assert.Equal(route, lines[^1]);
     }
@@ -261,7 +280,7 @@ public sealed class ExplicitMemberTests : IClassFixture<ILensServerFixture>
             ["kind"] = "call_sites",
         });
         Assert.Equal(
-            "1 call to ExplicitMembers.IShape.Area():\nExplicitMembers.ShapeUser.Measure(IShape): shape.Area()",
+            "1 call to ExplicitMembers.IShape.Area():\nExplicitMembers.ShapeUser.Measure(IShape)\n  shape.Area()",
             calls);
     }
 

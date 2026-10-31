@@ -12,6 +12,8 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
+    <!-- The latest language version, for an attribute class with type parameters. -->
+    <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <IsPackable>false</IsPackable>
     <IsPublishable>false</IsPublishable>

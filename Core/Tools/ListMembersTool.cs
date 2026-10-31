@@ -39,32 +39,58 @@ public static class ListMembersTool
             typesToScan.AddRange(external.Levels);
             unread = external.Unread;
         }
-        bool Passes(IEntity entity) =>
-            accessibility.Permits(entity.Accessibility)
-            && (string.IsNullOrEmpty(name_contains)
-                || entity.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase));
 
-        // The type's own constructors only: C# does not inherit them.
-        var groups = new List<(Noun Noun, List<string> Lines)>();
-        if (kindSet.Contains(MemberKind.Method))
-            groups.Add((Noun.Regular("method"), Collect(typesToScan, type,
-                t => t.Methods.Where(m => !m.IsAccessor && (!m.IsConstructor || t.Equals(type))),
-                Passes, include_compiler_generated)));
-        if (kindSet.Contains(MemberKind.Property))
-            groups.Add((new Noun("property", "properties"), Collect(typesToScan, type, t => t.Properties,
-                Passes, include_compiler_generated)));
-        if (kindSet.Contains(MemberKind.Field))
-            groups.Add((Noun.Regular("field"), Collect(typesToScan, type, t => t.Fields,
-                Passes, include_compiler_generated)));
-        if (kindSet.Contains(MemberKind.Event))
-            groups.Add((Noun.Regular("event"), Collect(typesToScan, type, t => t.Events,
-                Passes, include_compiler_generated)));
-        if (kindSet.Contains(MemberKind.NestedType))
-            groups.Add((new Noun("nested type", "nested types"), CollectNestedTypes(typesToScan, type,
-                Passes, include_compiler_generated)));
+        // A generated type named here is listed whatever the switch says: it was asked for by
+        // name, and an empty answer would read as "it has no members".
+        var includeGenerated = include_compiler_generated || CompilerGeneratedFilter.IsCompilerGenerated(type);
 
+        // A constructor is listed under its type's name, so the filter finds it by that name as
+        // well as by its own, .ctor or .cctor, which the other tools print and take.
+        bool NameMatches(IEntity entity) =>
+            string.IsNullOrEmpty(name_contains)
+            || entity.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase)
+            || (entity is IMethod { IsConstructor: true, DeclaringTypeDefinition: { } declaring }
+                && declaring.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase));
+
+        List<(Noun Noun, List<string> Lines)> Groups(AccessibilityFilter visible, bool withGenerated)
+        {
+            bool Passes(IEntity entity) => visible.Permits(entity.Accessibility) && NameMatches(entity);
+
+            // The type's own constructors only: C# does not inherit them.
+            var collected = new List<(Noun Noun, List<string> Lines)>();
+            if (kindSet.Contains(MemberKind.Method))
+                collected.Add((Noun.Regular("method"), Collect(typesToScan, type,
+                    t => t.DeclaredMethods().Where(m => !m.IsAccessor && (!m.IsConstructor || t.Equals(type))),
+                    Passes, withGenerated)));
+            if (kindSet.Contains(MemberKind.Property))
+                collected.Add((new Noun("property", "properties"), Collect(typesToScan, type, t => t.Properties,
+                    Passes, withGenerated)));
+            if (kindSet.Contains(MemberKind.Field))
+                collected.Add((Noun.Regular("field"), Collect(typesToScan, type, t => t.Fields,
+                    Passes, withGenerated)));
+            if (kindSet.Contains(MemberKind.Event))
+                collected.Add((Noun.Regular("event"), Collect(typesToScan, type, t => t.Events,
+                    Passes, withGenerated)));
+            if (kindSet.Contains(MemberKind.NestedType))
+                collected.Add((new Noun("nested type", "nested types"), CollectNestedTypes(typesToScan, type,
+                    Passes, withGenerated)));
+            return collected;
+        }
+        int Count(AccessibilityFilter visible, bool withGenerated) =>
+            Groups(visible, withGenerated).Sum(group => group.Lines.Count);
+
+        var groups = Groups(accessibility, includeGenerated);
         var subject = "of " + SignatureFormatter.FormatTypeDeclaration(type);
         var total = groups.Sum(group => group.Lines.Count);
+
+        // What the two filters left out is what the list gains under the other settings, so an
+        // overridden member counts once there as it does here. An answer with members names
+        // only what the accessibility filter left out, so the generated ones are not counted.
+        var withEveryAccessibility = Count(AccessibilityFilter.All, includeGenerated);
+        var generatedLeftOut = total > 0 ? 0 : Count(AccessibilityFilter.All, true) - withEveryAccessibility;
+        var leftOut = new LeftOut(withEveryAccessibility - total, generatedLeftOut,
+            generatedLeftOut > 0 && Count(accessibility, true) < generatedLeftOut);
+
         var sb = new StringBuilder(ListOutput.Header(total, new Noun("member", "members"), subject));
 
         // The limit counts entries across the groups; a group it cuts keeps its full count, and
@@ -81,9 +107,11 @@ public static class ListMembersTool
         }
         if (shown < total)
             sb.Append('\n').Append(ListOutput.Truncation(total - shown));
+        if (ListOutput.NotShown(leftOut, accessibility, total == 0) is { } notShown)
+            sb.Append('\n').Append(notShown);
         if (unread != null)
             sb.Append('\n').Append(
-                $"Not shown: what {unread.TypeName} and its base types declare; ILens could not load {unread.Assembly}");
+                $"Not shown: what {unread.TypeName} and its base types declare; {unread.Reason}");
 
         return sb.ToString();
     }
@@ -98,33 +126,43 @@ public static class ListMembersTool
         ITypeDefinition declaredOn,
         Func<ITypeDefinition, IEnumerable<IMember>> selector,
         Func<IEntity, bool> passes,
-        bool include_compiler_generated)
+        bool includeGenerated)
     {
-        // Walk derived → base. Dedup by signature so an override hides the base declaration.
-        // A base member prints as its type declares it but is keyed as declaredOn sees it: a
-        // generic base declares in its type parameters what an override takes as the type
-        // arguments the chain gives them.
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var members = new List<(IMember Member, string Line)>();
+        // Walk derived → base. A base member is left out where a class below declares one that
+        // hides it as C# does, so an override hides the declaration it overrides; two members of
+        // one type are always two members, and none hides another. A base member prints as its
+        // type declares it but is keyed as declaredOn sees it: a generic base declares in its type
+        // parameters what an override takes as the type arguments the chain gives them.
+        var hidden = new HashSet<string>(StringComparer.Ordinal);
+        var members = new List<(IMember Member, string Origin)>();
 
         foreach (var scanned in typesToScan)
         {
             var t = scanned.GetDefinition()!;
             var substitution = scanned.GetSubstitution();
             var origin = t.Equals(declaredOn) ? "" : $"  [from {ReferenceFormatter.FormatTypeName(t)}]";
+            var declared = new List<string>();
             foreach (var member in selector(t))
             {
                 if (!passes(member))
                     continue;
-                if (!include_compiler_generated && CompilerGeneratedFilter.IsCompilerGenerated(member))
+                if (!includeGenerated && CompilerGeneratedFilter.IsCompilerGenerated(member))
                     continue;
-                if (!seen.Add(MemberKey(member.Specialize(substitution))))
+                var key = MemberKey(member.Specialize(substitution));
+                if (hidden.Contains(key))
                     continue;
-                members.Add((member, ObsoleteMark(member) + SignatureFormatter.FormatMember(member) + origin));
+                declared.Add(key);
+                members.Add((member, origin));
             }
+            hidden.UnionWith(declared);
         }
 
+        // A declaration that reads alike another's is written in full; the mark of the class a
+        // member comes from is no part of the comparison, since the two still read as one member.
+        var declaration = ReferenceFormatter.Distinguishing(members.Select(entry => entry.Member),
+            SignatureFormatter.FormatMember, member => SignatureFormatter.FormatMember(member, full: true));
         return members
+            .Select(entry => (entry.Member, Line: ObsoleteMark(entry.Member) + declaration(entry.Member) + entry.Origin))
             .OrderBy(entry => entry.Member is IMethod { IsConstructor: true } ? 0 : 1)
             .ThenBy(entry => entry.Member.Name, StringComparer.Ordinal)
             .ThenBy(entry => entry.Line, StringComparer.Ordinal)
@@ -139,7 +177,7 @@ public static class ListMembersTool
         List<IType> typesToScan,
         ITypeDefinition declaredOn,
         Func<IEntity, bool> passes,
-        bool include_compiler_generated)
+        bool includeGenerated)
     {
         var nestedTypes = new List<(string Name, string Line)>();
         foreach (var scanned in typesToScan)
@@ -150,7 +188,7 @@ public static class ListMembersTool
             {
                 if (!passes(nested))
                     continue;
-                if (!include_compiler_generated && CompilerGeneratedFilter.IsCompilerGenerated(nested))
+                if (!includeGenerated && CompilerGeneratedFilter.IsCompilerGenerated(nested))
                     continue;
                 var name = ReferenceFormatter.FormatTypeName(nested);
                 nestedTypes.Add((name, ObsoleteMark(nested) + name + origin));
@@ -167,11 +205,15 @@ public static class ListMembersTool
             ? "[Obsolete] "
             : "";
 
+    /// <summary>
+    /// What a member hides a base class's member by, as C# hides one: its kind and name, and for
+    /// a method or an indexer its parameter types, and a method's count of type parameters, since
+    /// <c>Find(string)</c> leaves a base class's <c>Find&lt;T&gt;(string)</c> callable.
+    /// </summary>
     private static string MemberKey(IMember member) => member switch
     {
-        // Distinguish overloads on the same kind by parameter types: a method's, and an
-        // indexer's, since every indexer of a type shares one name.
-        IParameterizedMember m => $"{member.SymbolKind}:{m.Name}({string.Join(",", m.Parameters.Select(p => p.Type.ReflectionName))})",
+        IParameterizedMember m => $"{member.SymbolKind}:{m.Name}`{(m as IMethod)?.TypeParameters.Count ?? 0}" +
+            $"({string.Join(",", m.Parameters.Select(p => p.Type.ReflectionName))})",
         _ => $"{member.SymbolKind}:{member.Name}",
     };
 }

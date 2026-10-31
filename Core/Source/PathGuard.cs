@@ -7,21 +7,32 @@ namespace ILens;
 /// junction) resolution. Assembly size and the total memory budget are the
 /// <see cref="AssemblyHostRegistry"/>'s concern, not this class's.
 /// </summary>
+/// <remarks>
+/// A root may itself be given through a link, such as a folder moved to another drive with a
+/// junction left at its old place. Each root is therefore kept in two spellings, the one given
+/// and the one its links resolve to when the server starts, and a file under it may be asked
+/// for in either. The resolved spelling is not read again: what is allowed is the folder the
+/// link pointed to at startup, so a link moved to another target while the server runs leads
+/// to a refusal instead of widening what the server reads.
+/// A path that lies under neither spelling is refused before the file system is read, also
+/// when a link elsewhere would lead it into a root. Resolving it first would have the server
+/// follow links for any path a client names.
+/// </remarks>
 public sealed class PathGuard
 {
     // The Windows kernel caps a single path resolution at 63 reparse points;
     // mirror that as the reparse-resolution fixpoint cap.
     private const int MaxReparseDepth = 63;
-    private readonly IReadOnlyList<string> _allowedRoots;
+    private readonly IReadOnlyList<Root> _roots;
 
     public PathGuard(IEnumerable<string> allowedRoots)
     {
-        _allowedRoots = allowedRoots
+        AllowedRoots = allowedRoots
             .Select(r => Path.GetFullPath(r)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
             .ToList();
 
-        foreach (var root in _allowedRoots)
+        foreach (var root in AllowedRoots)
         {
             if (!Directory.Exists(root))
             {
@@ -32,9 +43,29 @@ public sealed class PathGuard
                     $"--allow-root path {reason}: {root}.");
             }
         }
+
+        _roots = AllowedRoots
+            .Select(root => new Root(root, ResolveReparsePoints(root, leafIsDirectory: true)))
+            .ToList();
     }
 
-    public IReadOnlyList<string> AllowedRoots => _allowedRoots;
+    /// <summary>The roots as they were given, which is how the server names them to a client.</summary>
+    public IReadOnlyList<string> AllowedRoots { get; }
+
+    /// <summary>A root as it was given and as its links resolved when the server started.</summary>
+    private readonly record struct Root(string Given, string Resolved)
+    {
+        /// <summary>Whether a normalized path lies under either spelling of the root.</summary>
+        public bool Covers(string normalizedPath) =>
+            IsUnderRoot(normalizedPath, Given) || IsUnderRoot(normalizedPath, Resolved);
+
+        /// <summary>
+        /// The root for a refusal: with the folder it resolved to where that is another path, since
+        /// a refusal after its link was moved cannot be understood without the folder allowed.
+        /// </summary>
+        public override string ToString() =>
+            Given.Equals(Resolved, StringComparison.OrdinalIgnoreCase) ? Given : $"{Given} (resolved: {Resolved})";
+    }
 
     /// <summary>
     /// Validate a requested assembly path. Returns the resolved absolute path on success.
@@ -42,7 +73,7 @@ public sealed class PathGuard
     /// </summary>
     public string Validate(string requested)
     {
-        if (_allowedRoots.Count == 0)
+        if (_roots.Count == 0)
             throw new ArgumentException(
                 "No allowed roots configured. The server cannot load any assemblies. " +
                 "Launch with one or more --allow-root <directory> flags.");
@@ -57,11 +88,10 @@ public sealed class PathGuard
 
         var normalized = Path.GetFullPath(requested);
 
-        var matchedRoot = _allowedRoots.FirstOrDefault(r => IsUnderRoot(normalized, r));
-        if (matchedRoot == null)
+        if (!_roots.Any(r => r.Covers(normalized)))
             throw new ArgumentException(
                 $"Path is not under any allowed root: {normalized}. " +
-                $"Allowed roots: {string.Join(", ", _allowedRoots)}.");
+                $"Allowed roots: {string.Join(", ", _roots)}.");
 
         if (!File.Exists(normalized))
             throw new ArgumentException(
@@ -73,12 +103,12 @@ public sealed class PathGuard
         // point the loader at a file outside every root. This is layered on top
         // of the lexical containment check, the same way the raw-'..' check is
         // layered before it.
-        var resolved = ResolveReparsePoints(normalized);
-        if (!_allowedRoots.Any(r => IsUnderRoot(resolved, r)))
+        var resolved = ResolveReparsePoints(normalized, leafIsDirectory: false);
+        if (!ResolvesIntoARoot(resolved))
             throw new ArgumentException(
                 $"Path resolves (via a symbolic link or junction) to a location " +
                 $"outside any allowed root: {resolved}. " +
-                $"Allowed roots: {string.Join(", ", _allowedRoots)}.");
+                $"Allowed roots: {string.Join(", ", _roots)}.");
 
         return resolved;
     }
@@ -92,19 +122,25 @@ public sealed class PathGuard
     public bool AdmitsReference(string path)
     {
         var normalized = Path.GetFullPath(path);
-        if (!_allowedRoots.Any(r => IsUnderRoot(normalized, r)))
+        if (!_roots.Any(r => r.Covers(normalized)))
             return true;
 
         try
         {
-            var resolved = ResolveReparsePoints(normalized);
-            return _allowedRoots.Any(r => IsUnderRoot(resolved, r));
+            return ResolvesIntoARoot(ResolveReparsePoints(normalized, leafIsDirectory: false));
         }
         catch (ArgumentException)
         {
             return false;
         }
     }
+
+    /// <summary>
+    /// Whether a path with its links resolved lies under the resolved spelling of a root. The
+    /// spelling a root was given in does not count here: no resolved path lies under a link.
+    /// </summary>
+    private bool ResolvesIntoARoot(string resolvedPath) =>
+        _roots.Any(r => IsUnderRoot(resolvedPath, r.Resolved));
 
     private static bool ContainsParentSegment(string path)
     {
@@ -122,9 +158,10 @@ public sealed class PathGuard
     /// <see cref="File.ResolveLinkTarget"/> resolves just the leaf — so this
     /// walks the components from the root down. A resolved target can itself
     /// contain unresolved reparse points, so the walk repeats to a fixpoint.
-    /// The input must be an existing, normalized absolute path.
+    /// The input must be an existing, normalized absolute path, whose last
+    /// component is a directory when <paramref name="leafIsDirectory"/>.
     /// </summary>
-    private static string ResolveReparsePoints(string path)
+    private static string ResolveReparsePoints(string path, bool leafIsDirectory)
     {
         try
         {
@@ -141,8 +178,8 @@ public sealed class PathGuard
                 for (int i = 0; i < components.Length; i++)
                 {
                     built = Path.Combine(built, components[i]);
-                    var isLeaf = i == components.Length - 1;
-                    var target = isLeaf
+                    var isFile = i == components.Length - 1 && !leafIsDirectory;
+                    var target = isFile
                         ? File.ResolveLinkTarget(built, returnFinalTarget: true)
                         : Directory.ResolveLinkTarget(built, returnFinalTarget: true);
                     if (target != null)
@@ -164,7 +201,9 @@ public sealed class PathGuard
                 $"Path has too many levels of symbolic links or junctions " +
                 $"(possible cycle): {path}.");
         }
-        catch (IOException ex)
+        // Whether a component is a link is read in the folder above it, which fails with
+        // UnauthorizedAccessException when that folder may not be listed.
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new ArgumentException(
                 $"Path could not be resolved through its symbolic links or " +

@@ -9,9 +9,10 @@ namespace ILens;
 /// <summary>
 /// Reads the fields some code looks up by reflection from the decompiler's syntax tree of it, where
 /// each lookup is known by the method it calls: Harmony's lookups in AccessTools and their extension
-/// spelling, Traverse's, and .NET's Type.GetField and GetFields. The class and the name each lookup
-/// is given are read by <see cref="HarmonyValueReader"/>, followed as far as it follows a value. A
-/// class or a name it cannot read is '?'.
+/// spelling, Traverse's, the fields a transpiler names to Harmony's CodeInstruction, CodeMatch and
+/// SymbolExtensions, and .NET's Type.GetField and GetFields. The class and the name each lookup is
+/// given are read by <see cref="HarmonyValueReader"/>, followed as far as it follows a value, and
+/// the field a lambda names where the call is given it. A class or a name it cannot read is '?'.
 /// </summary>
 internal static class FieldLookupReader
 {
@@ -19,7 +20,7 @@ internal static class FieldLookupReader
     /// The field lookups, by the full name of the type declaring each and its name, with the label
     /// their lines carry. The label says where the field is looked for: Field searches the base
     /// classes as well, DeclaredField the class alone. The extension spelling takes the label of the
-    /// call it spells.
+    /// call it spells, and a transpiler's helper its own name.
     /// </summary>
     private static readonly Dictionary<(string Type, string Name), string> Labels = new()
     {
@@ -37,6 +38,11 @@ internal static class FieldLookupReader
         [("HarmonyLib.AccessTools", "GetFieldNames")] = "GetFieldNames",
         [("HarmonyLib.AccessToolsExtensions", "GetFieldNames")] = "GetFieldNames",
         [("HarmonyLib.Traverse", "Field")] = "TraverseField",
+        [("HarmonyLib.CodeInstruction", "LoadField")] = "LoadField",
+        [("HarmonyLib.CodeInstruction", "StoreField")] = "StoreField",
+        [("HarmonyLib.CodeMatch", "LoadsField")] = "LoadsField",
+        [("HarmonyLib.CodeMatch", "StoresField")] = "StoresField",
+        [("HarmonyLib.SymbolExtensions", "GetFieldInfo")] = "GetFieldInfo",
         [("System.Type", "GetField")] = "GetField",
         [("System.Type", "GetFields")] = "GetFields",
     };
@@ -88,7 +94,8 @@ internal static class FieldLookupReader
     /// The classes and fields one lookup names, read in each frame its member is read in. The class
     /// comes from the call's receiver, its Type argument, its first type argument, or its
     /// "Namespace.Type:field" text, which Harmony splits at the one colon; the field from its string
-    /// argument. A class and a name that each have several values are not paired.
+    /// argument. A class and a name that each have several values are not paired. An overload that
+    /// takes an expression tree names the field its lambda reads.
     /// </summary>
     private static IEnumerable<(string Class, string Field)> ReadCall(
         HarmonyValueReader reader, IMethod member, SyntaxTree tree, InvocationExpression invocation, IMethod method)
@@ -96,6 +103,9 @@ internal static class FieldLookupReader
         var definition = method.MemberDefinition as IMethod ?? method;
         var parameters = definition.Parameters.Select(parameter => parameter.Type.ReflectionName).ToList();
         var arguments = invocation.Arguments.ToList();
+        var lambdaAt = parameters.FindIndex(HarmonyValueReader.IsExpressionTree);
+        if (lambdaAt >= 0)
+            return [HarmonyValueReader.LambdaField(arguments.ElementAtOrDefault(lambdaAt)) ?? ("?", "?")];
         var target = (invocation.Target as MemberReferenceExpression)?.Target;
         var receiver = method.IsStatic || target is TypeReferenceExpression ? null : target;
         var typeAt = parameters.IndexOf("System.Type");

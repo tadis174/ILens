@@ -39,7 +39,8 @@
        find_harmony_dependencies tests. HarmonyMod2 is the RVA-shifted twin
        the comparison tests use to check that identical IL at different file
        positions compares equal (same source, extra Padding class declared
-       earlier).
+       earlier). HarmonyMod3 compiles against Harmony 3.0's release candidate
+       3.0.0-rc.4 and holds the lookups only that version has.
        ReferenceOutputAssembly=false keeps their types out of Tests'
        compilation — we only want the DLLs to land in the test output bin. -->
   <ItemGroup>
@@ -49,6 +50,11 @@
                       OutputItemType="Content"
                       CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="Fixtures\HarmonyMod2\HarmonyMod2.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="Fixtures\HarmonyMod3\HarmonyMod3.csproj"
                       ReferenceOutputAssembly="false"
                       Private="true"
                       OutputItemType="Content"
@@ -71,7 +77,9 @@
        second time with SHIFTED defined, so that a few types change their base
        class or interface, one changes only inside accessor bodies, one has every
        compiler-generated name shifted, one changes only inside generated code,
-       and nothing else differs. Used by the compare tests. -->
+       an interface gains three members, one of two overloads that differ only
+       in a keyword changes its body, and nothing else differs. Used by the
+       compare tests. -->
   <ItemGroup>
     <ProjectReference Include="Fixtures\BaseShift\BaseShift.csproj"
                       ReferenceOutputAssembly="false"
@@ -110,7 +118,7 @@
                       OutputItemType="Content"
                       CopyToOutputDirectory="PreserveNewest"
                       Link="References\ExternalLib.dll" />
-    <PackageReference Include="Lib.Harmony.Ref" Version="2.3.6"
+    <PackageReference Include="Lib.Harmony.Ref" Version="2.4.3"
                       GeneratePathProperty="true"
                       ExcludeAssets="all" />
     <Content Include="$(PkgLib_Harmony_Ref)\ref\netstandard2.0\0Harmony.dll"
@@ -134,6 +142,44 @@
        field-access tests. -->
   <ItemGroup>
     <ProjectReference Include="Fixtures\FieldAccess\FieldAccess.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- SearchText fixture: one known line in each place search_code has to find
+       or leave out, each under the member it belongs to. Used by the
+       search_code tests. -->
+  <ItemGroup>
+    <ProjectReference Include="Fixtures\SearchText\SearchText.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- InterfaceShapes fixture: an interface with a member of every shape C#
+       allows in one, and overrides that return a more specific type than the
+       member they override, built for .NET 10, since the compiler refuses a
+       default implementation, a static abstract member and such an override
+       for netstandard2.0. Used by the tests on how list_members writes an
+       interface's members and by the tests on such an override. -->
+  <ItemGroup>
+    <ProjectReference Include="Fixtures\InterfaceShapes\InterfaceShapes.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- VbModules fixture, in Visual Basic: a module whose extension methods the
+       compiler writes into a sealed class that is not static, and a class with an
+       event and an auto-implemented property, for which the compiler adds fields.
+       Used by the tests on finding an extension method from the type it extends
+       and by those on the fields a compiler adds. -->
+  <ItemGroup>
+    <ProjectReference Include="Fixtures\VbModules\VbModules.vbproj"
                       ReferenceOutputAssembly="false"
                       Private="true"
                       OutputItemType="Content"

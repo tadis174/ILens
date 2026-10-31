@@ -82,7 +82,7 @@ public sealed class ParsedTypeName
             var inner = text[(open + 1)..^1];
             if (inner.All(c => c == ',' || char.IsWhiteSpace(c)))
                 return new Segment(name, inner.Count(c => c == ',') + 1, null);
-            var arguments = SplitArguments(inner);
+            var arguments = SplitOutsideBrackets(inner);
             return arguments.Any(a => a.Length == 0) ? null : new Segment(name, arguments.Count, arguments);
         }
 
@@ -99,8 +99,11 @@ public sealed class ParsedTypeName
         return text.Length == 0 ? null : new Segment(text, null, null);
     }
 
-    /// <summary>Split an argument list on the commas that are not nested in brackets.</summary>
-    private static List<string> SplitArguments(string inner)
+    /// <summary>
+    /// Split a list of types on the commas that are not nested in angle or square brackets: an
+    /// argument list, or a text holding several type patterns.
+    /// </summary>
+    internal static List<string> SplitOutsideBrackets(string inner)
     {
         var arguments = new List<string>();
         var depth = 0;

@@ -79,7 +79,7 @@ public sealed class FieldAccessTests : IClassFixture<ILensServerFixture>
         // returned from the method, and a call on a type parameter.
         {
             Holder, "Cursor", "assigned_by",
-            ["FieldAccess.Holder.AdvanceCursor() (may write: calls System.Collections.Generic.List<System.Int32>.Enumerator.MoveNext() on it)"]
+            ["FieldAccess.Holder.AdvanceCursor() (may write: calls System.Collections.Generic.List<int>.Enumerator.MoveNext() on it)"]
         },
         {
             Holder, "Shared", "assigned_by",

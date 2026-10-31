@@ -17,9 +17,10 @@ public static class ServerInstructions
 
     private const string Purpose =
         "ILens reads compiled .NET assemblies: it finds types and members, decompiles one type or member to C#, " +
-        "analyzes who uses, calls, overrides or implements a symbol, compares two builds of an assembly, and " +
-        "lists what a Harmony mod patches. Each answer covers only the question asked, so it costs far less than " +
-        "dumping a file with ildasm or ilspycmd, and unlike source found on the web it matches the build inspected.";
+        "analyzes who uses, calls, overrides or implements a symbol, searches the decompiled code for a pattern, " +
+        "compares two builds of an assembly, and lists what a Harmony mod patches. Each answer covers only the " +
+        "question asked, so it costs far less than dumping a file with ildasm or ilspycmd, and unlike source found " +
+        "on the web it matches the build inspected.";
 
     private const string RootsLead = "Assemblies under these directories can be inspected: ";
 
@@ -30,8 +31,10 @@ public static class ServerInstructions
         "- decompile: one member as C#, or a whole type.\n" +
         "- analyze: who uses, reads, writes, instantiates, overrides or implements a type or member, what a " +
         "member uses, and every call to a method with its arguments (kind call_sites).\n" +
-        "- compare: two builds of an assembly, from the changed types down to one method's two bodies.\n" +
-        "- find_harmony_dependencies: the members a Harmony mod patches and the fields it reaches by reflection.\n" +
+        "- search_code: the lines of decompiled code that match a regular expression, in a type, a namespace or " +
+        "the whole assembly.\n" +
+        "- compare: two builds of an assembly, from the changed types down to the changed lines of one method.\n" +
+        "- find_harmony_dependencies: the members a Harmony mod patches or reaches by reflection.\n" +
         "- list_allowed_roots: the directories above.";
 
     private const string Usage =
