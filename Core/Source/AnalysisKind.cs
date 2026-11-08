@@ -1,8 +1,8 @@
 namespace ILens;
 
 /// <summary>
-/// Cross-reference analysis kinds exposed by the analyze tool. Each value but
-/// <see cref="CallSites"/> maps to an ILSpyX analyzer header (see <see cref="AnalysisDispatch"/>),
+/// Cross-reference analysis kinds exposed by the analyze tool. A few are answered by an ILSpyX
+/// analyzer and the others by ILens's own code, as <see cref="AnalysisDispatch"/> records,
 /// and each is valid only for a subset of symbol categories — e.g. <see cref="ReadBy"/> applies
 /// only to fields and properties.
 /// The schema enum surfaces the closed set to the agent at tool-listing time.

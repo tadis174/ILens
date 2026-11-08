@@ -27,8 +27,8 @@ public enum AccessibilityFilter
 }
 
 /// <summary>
-/// Helpers on <see cref="AccessibilityFilter"/>. Shared by tools that filter members
-/// (list_members, find_methods) so the inclusion logic stays in one place.
+/// Helpers on <see cref="AccessibilityFilter"/>. Shared by the tools that filter by
+/// accessibility (find_types, find_methods, list_members) so the inclusion logic stays in one place.
 /// </summary>
 public static class AccessibilityFilterExtensions
 {

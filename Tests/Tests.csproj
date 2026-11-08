@@ -18,11 +18,17 @@
     <EmbeddedResource Remove="Fixtures\**" />
   </ItemGroup>
 
+  <!-- A Hold element keeps a reference below the newest version and says why;
+       check-updates.ps1 lists it as held with that reason. -->
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" Version="6.0.4" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
-    <PackageReference Include="xunit" Version="2.9.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="xunit" Version="2.9.3">
+      <Hold>
+        The newest of xunit v2. v3 is another package, xunit.v3, and moving to it migrates the
+        test project while nothing that ships changes.
+      </Hold>
+    </PackageReference>
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
   </ItemGroup>
 
   <!-- The MCP SDK client (drives the ILens server over stdio) and
@@ -30,8 +36,18 @@
        test output as the e2e inspection target — the tests point ILens at it,
        they do not call it directly). -->
   <ItemGroup>
-    <PackageReference Include="ModelContextProtocol" Version="1.2.0" />
-    <PackageReference Include="ICSharpCode.Decompiler" Version="9.1.0.7988" />
+    <PackageReference Include="ModelContextProtocol" Version="1.4.1">
+      <Hold>
+        Held where Core's reference is, so that the suite's client and the server it tests come
+        from one release of the SDK.
+      </Hold>
+    </PackageReference>
+    <PackageReference Include="ICSharpCode.Decompiler" Version="9.1.0.7988">
+      <Hold>
+        The tests' inspection target, not a library of ILens: a new version changes what the
+        tests inspect, not what ships.
+      </Hold>
+    </PackageReference>
   </ItemGroup>
 
   <!-- HarmonyMod fixture: a tiny Harmony-patching assembly compiled from

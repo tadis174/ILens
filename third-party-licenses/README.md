@@ -33,7 +33,7 @@ covers every package from those repos.
 
 The .NET runtime third-party notices are separate from any LICENSE file —
 they cover non-Microsoft components Microsoft included inside the runtime
-(ICU, LZMA SDK, zlib, etc.). Bundled because `<SelfContained>true</SelfContained>`
+(zlib-ng, Brotli, Unicode data, etc.). Bundled because `<SelfContained>true</SelfContained>`
 ships the runtime inside the binary.
 
 ## INDEX.md format
@@ -81,7 +81,8 @@ line — the gate checks this matches the highest installed `Microsoft.NETCore.A
 
 ## Pre-publish gate (`check.ps1`)
 
-Runs as part of `/publish` Step 1. Seven checks; all must pass.
+Runs before each release, ahead of `dotnet publish`, which does not run it.
+Seven checks; all must pass.
 
 1. **Completeness** — every package in `Build/obj/Core/project.assets.json` (filtered
    to those with `compile`/`runtime` entries — i.e. excluding build-time-only
@@ -99,7 +100,7 @@ Runs as part of `/publish` Step 1. Seven checks; all must pass.
 6. **Upstream drift** *(network)* — for every per-source `README.md`, fetches
    each `Source URL:` and compares byte-for-byte against the vendored file.
    Hard fail on any difference. Use `-Offline` to skip during local development;
-   never use `-Offline` in `/publish`.
+   never use `-Offline` for a release.
 7. **NuGet metadata cross-check** *(offline)* — for every package, reads the
    `.nuspec` from the local NuGet cache and verifies the declared `projectUrl`
    appears on some source's `- Source:` line in `INDEX.md`. URLs are compared
@@ -116,7 +117,7 @@ Exits 0 on success, 1 on attribution drift, 2 if `dotnet restore` hasn't run.
 
 ## Post-stage gate (`check-staged.ps1`)
 
-Runs as part of `/publish` Step 5.5, after `dotnet publish` has staged
+Runs during a release, after `dotnet publish` has staged
 `Build/dist/`. Verifies the staged contents match an allowlist:
 
 - `Build/dist/` root is exactly `ILens.exe`, `LICENSE`, `THIRD-PARTY-NOTICES.txt`,

@@ -8,9 +8,13 @@
     members of its base interface and makes one abstract again, and an abstract
     class with a class derived from it declares the same shapes as the control.
     Returns.cs holds overrides that return a more specific type than the member
-    they override, in a namespace of its own. It targets .NET 10, since the
+    they override, in a namespace of its own, and Params.cs, Conditions.cs and
+    Language.cs, each in its own as well, parameters that take any number of
+    arguments, conditions on type parameters, and code whose decompiled form
+    turns on the C# version the decompiler writes. It targets .NET 10, since the
     compiler refuses default implementations, static abstract members and such
-    overrides for netstandard2.0, which the other fixtures target. Not consumed
+    overrides for netstandard2.0, which the other fixtures target, and
+    netstandard2.0 offers no AsSpan, which Language.cs calls. Not consumed
     by Tests' source code; only its compiled output is inspected by the ILens
     server during the e2e suite.
   -->

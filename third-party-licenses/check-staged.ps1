@@ -92,7 +92,7 @@ if (Report "Missing files in Build/dist/third-party-licenses/ (declared in INDEX
 
 if ($failed) {
     Write-Host ""
-    Write-Host "If a new file is intentional, add it to the allowlist in this script and (if it is third-party content) update INDEX.md and vendor the upstream LICENSE."
+    Write-Host "If a new file is intentional, add it to staged-allowlist.txt and (if it is third-party content) update INDEX.md and vendor the upstream LICENSE."
     exit 1
 }
 

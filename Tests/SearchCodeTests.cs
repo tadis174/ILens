@@ -128,12 +128,13 @@ public sealed class SearchCodeTests : IClassFixture<ILensServerFixture>
     }
 
     // Where an XML documentation file lies beside the assembly, the decompiler writes a comment
-    // above each documented member, inside its class. The class's attribute and header line still
-    // stand under the class, and the nested class's under it, as they do without the file, which
-    // the test writes beside a copy of the fixture. The search finds a line of the documentation,
-    // so its text holds the comments.
+    // above each documented declaration; the test writes the file beside a copy of the fixture.
+    // Each comment's lines stand under what it documents, the class's under the class, a
+    // method's under the method and the nested class's under the nested class, so that a search
+    // of the nested class finds its own. The class's attribute and header line still stand under
+    // the class, and the nested class's under it, as they do without the file.
     [Fact]
-    public async Task HeaderLines_StandUnderTheirClass_AlsoWhereItsMembersAreDocumented()
+    public async Task DocumentationLines_StandUnderWhatTheyDocument_AndHeaderLinesUnderTheirClass()
     {
         const string regex = @"\[Serializable\]|: IDisposable|: IComparable";
         const string expected =
@@ -157,6 +158,7 @@ public sealed class SearchCodeTests : IClassFixture<ILensServerFixture>
                 <doc>
                   <assembly><name>SearchText</name></assembly>
                   <members>
+                    <member name="T:SearchText.Documented"><summary>Holds a part.</summary></member>
                     <member name="M:SearchText.Documented.Dispose"><summary>Releases nothing.</summary></member>
                     <member name="T:SearchText.Documented.Part"><summary>A part.</summary></member>
                     <member name="M:SearchText.Documented.Part.CompareTo(System.Object)"><summary>Compares nothing.</summary></member>
@@ -166,15 +168,50 @@ public sealed class SearchCodeTests : IClassFixture<ILensServerFixture>
 
             await using var client = await StartServer("ILens-search-documented", root);
             var arguments = new Dictionary<string, object?> { ["assembly"] = copy, ["type_name"] = "SearchText.Documented" };
-            Assert.StartsWith(
-                "1 line matching Releases nothing in SearchText.Documented:\n",
-                await CallToolText(client, "search_code", new(arguments) { ["regex"] = "Releases nothing" }));
+            Assert.Equal(
+                "4 lines matching ^/// in SearchText.Documented:\n" +
+                "SearchText.Documented\n" +
+                "  /// <summary>Holds a part.</summary>\n" +
+                "SearchText.Documented.Dispose()\n" +
+                "  /// <summary>Releases nothing.</summary>\n" +
+                "SearchText.Documented.Part\n" +
+                "  /// <summary>A part.</summary>\n" +
+                "SearchText.Documented.Part.CompareTo(object)\n" +
+                "  /// <summary>Compares nothing.</summary>",
+                await CallToolText(client, "search_code", new(arguments) { ["regex"] = "^///" }));
+            Assert.Equal(
+                "2 lines matching ^/// in SearchText.Documented.Part:\n" +
+                "SearchText.Documented.Part\n" +
+                "  /// <summary>A part.</summary>\n" +
+                "SearchText.Documented.Part.CompareTo(object)\n" +
+                "  /// <summary>Compares nothing.</summary>",
+                await CallToolText(client, "search_code",
+                    new(arguments) { ["regex"] = "^///", ["type_name"] = "SearchText.Documented.Part" }));
             Assert.Equal(expected, await CallToolText(client, "search_code", new(arguments) { ["regex"] = regex }));
         }
         finally
         {
             await ILensServerFixture.DeleteWhenReleased(root);
         }
+    }
+
+    // A note the decompiler writes above a declaration of its own accord stands under that
+    // declaration, as documentation does. C# cannot declare a property that takes a parameter and
+    // is not its class's default, so the decompiler writes the getter of VbModules' Grid.Cell as a
+    // method with a note above it.
+    [Fact]
+    public async Task TheDecompilersNoteAboveADeclaration_StandsUnderIt()
+    {
+        Assert.Equal(
+            "1 line matching no syntax for parameterized property in VbModules.Properties.Grid:\n" +
+            "VbModules.Properties.Grid.get_Cell(int)\n" +
+            "  // C# has no syntax for parameterized property 'Cell'.",
+            await CallToolText(_server.Client, "search_code", new()
+            {
+                ["assembly"] = FixturePath("VbModules.dll"),
+                ["regex"] = "no syntax for parameterized property",
+                ["type_name"] = "VbModules.Properties.Grid",
+            }));
     }
 
     // The using lines and the namespace line belong to no type. Outer's text opens with
@@ -262,6 +299,92 @@ public sealed class SearchCodeTests : IClassFixture<ILensServerFixture>
             await Search(Marker, new() { ["type_name"] = "SearchText.Outer", ["include_compiler_generated"] = true }));
     }
 
+    // The decompiler writes a lambda's class, the class that caches the lambdas that capture
+    // nothing, and an iterator's and an async method's state machine inside the methods they
+    // serve, so no line of the text is theirs. Searching one by its name is an error that names
+    // the class around it, whose search finds the code under the method it serves.
+    [Theory]
+    [InlineData("SearchText.Shapes.<>c__DisplayClass1_0", "SearchText.Shapes.InCapturingLambda(string)\n  Marker.Hit(where + \" captured\");")]
+    [InlineData("SearchText.Shapes.<>c", "SearchText.Shapes.InLambda()\n  Marker.Hit(\"lambda\");")]
+    [InlineData("SearchText.Shapes.<InIterator>d__3", "SearchText.Shapes.InIterator()\n  Marker.Hit(\"iterator\");")]
+    [InlineData("SearchText.Shapes.<InAsyncMethod>d__4", "SearchText.Shapes.InAsyncMethod()\n  Marker.Hit(\"async method\");")]
+    public async Task ATypeWrittenInsideAnother_IsAnErrorNamingTheTypeAroundIt(string typeName, string code)
+    {
+        var arguments = Arguments(".");
+        arguments["type_name"] = typeName;
+
+        var (text, isError) = await CallTool(_server.Client, "search_code", arguments);
+
+        Assert.True(isError, text);
+        Assert.Equal(
+            $"Error: ArgumentException: {typeName} has no declaration of its own in the decompiled code of " +
+            "SearchText.Shapes, where a search finds its contents.",
+            text);
+        Assert.Contains(code, await Search(Marker, new() { ["type_name"] = "SearchText.Shapes" }));
+    }
+
+    // The decompiler writes no declaration of the helper class that holds a constant array's data,
+    // of an anonymous type or of a <Module> without members. Each is searched as the compiler
+    // generated it, rather than answering that no line matches, and so is the struct nested in the
+    // helper class, while a search of the whole assembly leaves them out unless generated code is
+    // asked for.
+    [Theory]
+    [InlineData("<PrivateImplementationDetails>", "<PrivateImplementationDetails>.__StaticArrayInitTypeSize=12",
+        "internal struct __StaticArrayInitTypeSize=12")]
+    [InlineData("<PrivateImplementationDetails>.__StaticArrayInitTypeSize=12",
+        "<PrivateImplementationDetails>.__StaticArrayInitTypeSize=12", "[StructLayout(LayoutKind.Explicit, Pack = 1, Size = 12)]")]
+    [InlineData("<>f__AnonymousType0<,>", "<>f__AnonymousType0<,>.Left", "public <Left>j__TPar Left => <Left>i__Field;")]
+    [InlineData("<Module>", "<Module>", "internal class <Module>")]
+    public async Task AHiddenTopLevelType_IsSearched(string typeName, string owner, string line)
+    {
+        string text = await Search(".", new() { ["type_name"] = typeName });
+
+        Assert.Contains($"\n{owner}\n", text);
+        Assert.Contains($"\n  {line}\n", text);
+        Assert.DoesNotContain("No lines matching", text);
+    }
+
+    [Fact]
+    public async Task AHiddenTopLevelType_IsSearchedWithGeneratedCodeOnly()
+    {
+        Assert.DoesNotContain("__StaticArrayInitTypeSize", await Search("StaticArrayInit"));
+        Assert.Contains("<PrivateImplementationDetails>.__StaticArrayInitTypeSize=12",
+            await Search("StaticArrayInit", new() { ["include_compiler_generated"] = true }));
+    }
+
+    // The compiler makes grouping classes of GaugeExtensions' C# 14 extension blocks, with marker
+    // types nested in them, and the decompiler writes them as the blocks inside GaugeExtensions.
+    // Their names carry a hash, so find_types gives them.
+    [Fact]
+    public async Task AnExtensionBlocksGeneratedTypes_AreAnErrorNamingTheirClass()
+    {
+        string assembly = FixturePath("InterfaceShapes.dll");
+        string list = await CallToolText(_server.Client, "find_types", new()
+        {
+            ["assembly"] = assembly,
+            ["name_contains"] = "$",
+            ["include_compiler_generated"] = true,
+            ["accessibility"] = "all",
+        });
+        string[] names = list.Split('\n')
+            .Where(line => line.StartsWith("InterfaceShapes.Language.GaugeExtensions.<", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Contains(names, name => name.Contains(".<M>$", StringComparison.Ordinal));
+        Assert.Contains(names, name => !name.Contains(".<M>$", StringComparison.Ordinal));
+
+        foreach (string name in names)
+        {
+            var (text, isError) = await CallTool(_server.Client, "search_code",
+                new() { ["assembly"] = assembly, ["regex"] = ".", ["type_name"] = name });
+
+            Assert.True(isError, text);
+            Assert.Equal(
+                $"Error: ArgumentException: {name} has no declaration of its own in the decompiled code of " +
+                "InterfaceShapes.Language.GaugeExtensions, where a search finds its contents.",
+                text);
+        }
+    }
+
     // A pattern with a lookbehind cannot run on the engine that answers in linear time and is
     // answered by the other one, with the same lines. A pattern that runs away on that engine,
     // here on Runaway's long method name, ends as an error naming the member, and the same
@@ -306,7 +429,7 @@ public sealed class SearchCodeTests : IClassFixture<ILensServerFixture>
     }
 
     // With a time limit of nothing a call decompiles the least it can, so the first call over
-    // the fixture's twelve classes cannot finish. Every call gets further than the one before,
+    // the fixture's thirteen classes cannot finish. Every call gets further than the one before,
     // and the last answers what the shared server answers, which has its default limit.
     [Fact]
     public async Task ACallThatRunsOutOfTime_SaysHowFarItCame_AndRepeatingItContinues()
@@ -320,7 +443,7 @@ public sealed class SearchCodeTests : IClassFixture<ILensServerFixture>
         {
             answer = await CallToolText(client, "search_code", Arguments(Marker));
             var state = Regex.Match(answer,
-                @"^Not finished: (\d+) of 12 types decompiled\. Repeat the call to continue; what is done is kept\.$");
+                @"^Not finished: (\d+) of 13 types decompiled\. Repeat the call to continue; what is done is kept\.$");
             if (!state.Success)
                 break;
             states.Add(int.Parse(state.Groups[1].Value));
@@ -436,7 +559,7 @@ public sealed class SearchCodeTests : IClassFixture<ILensServerFixture>
     }
 
     private static async Task<McpClient> StartServer(string name, string root, params string[] options) =>
-        await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+        await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
         {
             Name = name,
             Command = ILensServerFixture.ResolveILensExecutable(),

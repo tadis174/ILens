@@ -981,14 +981,14 @@ public sealed class SymbolResolver
         {
             var hinted = TryFindMethod(type, memberName, hint, includeExplicit: true, explainAbsence: false)
                 ?? TryFindMethod(type, memberName, hint, includeExplicit: true, unreachable: true)
-                ?? throw NotFound("Method", memberName, type, searchesExtensions: true);
+                ?? throw NotFound("Method", memberName, type);
             RequireOwn(type, hinted.Method, hint);
             return (hinted.Method, hinted.Origin, SymbolCategory.Method);
         }
 
         return FindMember(type, memberName, explainAbsence: false)
             ?? FindMember(type, memberName, unreachable: true)
-            ?? throw NotFound("Member", memberName, type, searchesExtensions: true);
+            ?? throw NotFound("Member", memberName, type);
     }
 
     private (ISymbol Symbol, MemberOrigin Origin, SymbolCategory Category)? FindMember(
@@ -1241,7 +1241,7 @@ public sealed class SymbolResolver
         methodName = ConstructorNameFor(type, methodName);
         var found = TryFindMethod(type, methodName, hint, includeExplicit: true, explainAbsence: false)
             ?? TryFindMethod(type, methodName, hint, includeExplicit: true, unreachable: true)
-            ?? throw NotFound("Method", methodName, type, searchesExtensions: true);
+            ?? throw NotFound("Method", methodName, type);
         RequireOwn(type, found.Method, hint);
         return found;
     }
@@ -2026,10 +2026,10 @@ public sealed class SymbolResolver
     /// runtimes and the SDK on 2026-10-17, 32 bear the name of a static method of System.Array,
     /// such as Reverse, Resize or IndexOf, and 30 that of an instance member, all of them
     /// MemoryExtensions.CopyTo beside Array.CopyTo. C# 14 also converts an array to Span&lt;T&gt;
-    /// and ReadOnlySpan&lt;T&gt; for an extension method's receiver, which the decompiler's rule,
-    /// written before it, does not, so an extension method for a span is not found through an
-    /// array. The rule also leaves out IReadOnlyCollection&lt;T&gt;, which
-    /// <see cref="FitsArray"/> adds.
+    /// and ReadOnlySpan&lt;T&gt; for an extension method's receiver, which the decompiler's rule
+    /// does only in a type system built with first-class span conversions, and the host's is built
+    /// without them (<see cref="AssemblyHost.FitsExtension"/>), so an extension method for a span
+    /// is not found through an array.
     /// </remarks>
     public ArrayLookup FindExtensionThroughArray(NamedArray array, string memberName, MethodHint hint,
         bool methodsOnly = false)
@@ -2099,7 +2099,7 @@ public sealed class SymbolResolver
     /// </summary>
     public bool DoesNotFit(NamedArray array, IMethod method) =>
         method.IsExtensionMethod && TypeWalker.NamesTypeParameter(TypeWalker.ExtendedType(method))
-        && array.Unread.Count == 0 && !FitsArray(array, method);
+        && array.Unread.Count == 0 && !_fitsExtension(array.Type, method);
 
     /// <summary>
     /// The error for a name a lookup through <paramref name="array"/> finds neither as a member of
@@ -2264,7 +2264,7 @@ public sealed class SymbolResolver
     /// <summary>
     /// True where code can call <paramref name="method"/>, an extension method of this assembly, on
     /// <paramref name="array"/>: its receiver is that array, or the decompiler's rule takes it
-    /// (<see cref="FitsArray"/>).
+    /// (<see cref="AssemblyHost.FitsExtension"/>).
     /// </summary>
     /// <remarks>
     /// The receiver is compared by name first (<see cref="IdentityName"/>), since a type whose
@@ -2273,7 +2273,7 @@ public sealed class SymbolResolver
     /// </remarks>
     private bool AppliesTo(NamedArray array, IMethod method) =>
         (TypeWalker.ExtendedType(method) is ArrayType receiver && IdentityName(receiver) == IdentityName(array.Type))
-        || FitsArray(array, method);
+        || _fitsExtension(array.Type, method);
 
     /// <summary>
     /// <paramref name="type"/>'s reflection name with the spellings C# takes for one type made one:
@@ -2297,33 +2297,6 @@ public sealed class SymbolResolver
             _ => type.ReflectionName,
         },
     };
-
-    /// <summary>
-    /// True where the decompiler's rule (<see cref="AssemblyHost.FitsExtension"/>) lets code call
-    /// <paramref name="method"/> on <paramref name="array"/>, or, for a receiver of
-    /// IReadOnlyCollection&lt;T&gt; and an array of one dimension, on the array's
-    /// IReadOnlyList&lt;T&gt;, which the array converts to and which converts to that receiver.
-    /// </summary>
-    /// <remarks>
-    /// C# converts an array of one dimension to IReadOnlyCollection&lt;T&gt; as to the other generic
-    /// interfaces it implements. The conversions of ICSharpCode.Decompiler 9.1
-    /// (CSharpConversions.UnpackGenericArrayInterface) leave that one out, so the rule alone turned
-    /// down 65 such methods in 14 files of the .NET SDK, counted on 2026-10-18, which C# calls on an
-    /// array; ILSpy 10.1.1 and 11.1 have the case. Asked through IReadOnlyList&lt;T&gt;, the rule
-    /// still infers the type arguments and checks the constraints, with the array's element in the
-    /// place of T.
-    /// </remarks>
-    private bool FitsArray(NamedArray array, IMethod method)
-    {
-        if (_fitsExtension(array.Type, method))
-            return true;
-        var receiver = TypeWalker.ExtendedType(method);
-        var generic = receiver is ParameterizedType parameterized ? parameterized.GenericType : receiver;
-        return array.Type is ArrayType { Dimensions: 1 } single
-            && ReferenceFormatter.FullTypeNameOf(generic)?.ReflectionName == "System.Collections.Generic.IReadOnlyCollection`1"
-            && _decompilerTypeSystem().FindType(KnownTypeCode.IReadOnlyListOfT) is ITypeDefinition readOnlyList
-            && _fitsExtension(new ParameterizedType(readOnlyList, [single.ElementType]), method);
-    }
 
     /// <summary>
     /// The requested type, then its base-class chain, most-derived first, each with the origin
@@ -2421,15 +2394,13 @@ public sealed class SymbolResolver
     /// at one ILens could not read, the error says so, since that class may declare the name.
     /// Where a usual name does not apply, it names what does, see <see cref="MeantClause"/>.
     /// </summary>
-    private ArgumentException NotFound(string kind, string name, ITypeDefinition type, bool searchesExtensions)
+    private ArgumentException NotFound(string kind, string name, ITypeDefinition type)
     {
         var unread = BasesOf(type).Unread;
         var bases = unread is null ? "its base types" : "the base types ILens could load";
-        var searched = searchesExtensions
-            ? $"{ReferenceFormatter.FormatTypeName(type)}, {bases}, or as an extension method"
-            : $"{ReferenceFormatter.FormatTypeName(type)} or {bases}";
         return new ArgumentException(
-            $"{kind} '{name}' not found on {searched}{MeantClause(type, name)}{UnreadClause(unread)}.");
+            $"{kind} '{name}' not found on {ReferenceFormatter.FormatTypeName(type)}, {bases}, or as an extension " +
+            $"method{MeantClause(type, name)}{UnreadClause(unread)}.");
     }
 
     /// <summary>
@@ -2439,7 +2410,9 @@ public sealed class SymbolResolver
     /// <c>[IndexerName]</c>, as <c>System.String</c> does with <c>Chars</c>, so a question for
     /// <c>Item</c> or its accessors gets the accessors the indexer has; the most derived level
     /// with an indexer decides, since an indexer there hides one further up. The type's own
-    /// name, which reaches its constructors, gets <c>.cctor</c> when the only one is static.
+    /// name, which reaches its constructors, gets <c>.cctor</c> when the only one is static. The
+    /// name of a property of a C# 14 extension block gets the methods the compiler made of its
+    /// accessors (<see cref="BlockPropertyMethods"/>).
     /// </summary>
     private string MeantClause(ITypeDefinition type, string name)
     {
@@ -2480,7 +2453,37 @@ public sealed class SymbolResolver
         }
         if (name == type.Name && type.DeclaredMethods().Any(method => method.IsConstructor && method.IsStatic))
             return "; its static constructor is named '.cctor'";
+        if (BlockPropertyMethods(type, name) is { Count: > 0 } methods)
+            return $"; {name} is a property of an extension block: {ReferenceFormatter.FormatMethodList(methods)}";
         return "";
+    }
+
+    /// <summary>
+    /// The methods the compiler made of the accessors of the properties named
+    /// <paramref name="name"/> in <paramref name="type"/>'s C# 14 extension blocks. Such a
+    /// property is no member of the class: every answer names it by these methods. A block's
+    /// method keeps its name in the method the compiler makes of it, so only a property's name
+    /// needs this.
+    /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: ExtensionInfo gives a
+    /// block's properties as the compiler's grouping class declares them and maps each accessor
+    /// to the method the compiler made of it (GetMembersOfGroup, InfoOfExtensionMember). The
+    /// case: Decompile_OfABlockPropertysName_NamesTheMethodsOfItsAccessors in
+    /// ExtensionBlockTests.
+    /// </remarks>
+    private static List<IMethod> BlockPropertyMethods(ITypeDefinition type, string name)
+    {
+        if (type.ExtensionInfo is not { } extensions)
+            return [];
+        return extensions.ExtensionGroups
+            .SelectMany(group => extensions.GetMembersOfGroup(group.Marker))
+            .OfType<IProperty>()
+            .Where(property => property.Name == name)
+            .SelectMany(property => new[] { property.Getter, property.Setter })
+            .Select(accessor => TypeWalker.ImplementationOf(extensions, accessor))
+            .Where(method => method != null)
+            .ToList();
     }
 
     /// <summary>
@@ -2767,19 +2770,6 @@ public sealed class SymbolResolver
 
     // --- Field resolution ------------------------------------------------------
 
-    /// <summary>
-    /// Resolve a field by name, searching declared → inherited.
-    /// </summary>
-    public (IField Field, MemberOrigin Origin) ResolveField(
-        ITypeDefinition type, string fieldName)
-    {
-        var found = TryFindField(type, fieldName)
-            ?? TryFindField(type, fieldName, unreachable: true)
-            ?? throw NotFound("Field", fieldName, type, searchesExtensions: false);
-        RequireOwn(type, found.Field);
-        return found;
-    }
-
     /// <summary>Whether the type or one of its base classes declares a field of the name.</summary>
     public bool HasField(ITypeDefinition type, string fieldName) =>
         TryFindField(type, fieldName, unreachable: true) is not null;
@@ -2802,21 +2792,6 @@ public sealed class SymbolResolver
     }
 
     // --- Property resolution ---------------------------------------------------
-
-    /// <summary>
-    /// Resolve a property by name, searching declared → inherited, then explicit interface
-    /// implementations. Throws when none has the name, and when the level that has it has
-    /// several, see <see cref="AmbiguousPropertyError"/>.
-    /// </summary>
-    public (IProperty Property, MemberOrigin Origin) ResolveProperty(
-        ITypeDefinition type, string propertyName)
-    {
-        var found = TryFindProperty(type, propertyName, includeExplicit: true)
-            ?? TryFindProperty(type, propertyName, includeExplicit: true, unreachable: true)
-            ?? throw NotFound("Property", propertyName, type, searchesExtensions: false);
-        RequireOwn(type, found.Property);
-        return found;
-    }
 
     /// <summary>
     /// The error for a level with more than one property of the name. The only case in C# is
@@ -2861,21 +2836,6 @@ public sealed class SymbolResolver
     }
 
     // --- Event resolution ------------------------------------------------------
-
-    /// <summary>
-    /// Resolve an event by name, searching declared → inherited, then explicit interface
-    /// implementations. Throws when none has the name, and when the level that has it has
-    /// several, see <see cref="AmbiguousEventError"/>.
-    /// </summary>
-    public (IEvent Event, MemberOrigin Origin) ResolveEvent(
-        ITypeDefinition type, string eventName)
-    {
-        var found = TryFindEvent(type, eventName, includeExplicit: true)
-            ?? TryFindEvent(type, eventName, includeExplicit: true, unreachable: true)
-            ?? throw NotFound("Event", eventName, type, searchesExtensions: false);
-        RequireOwn(type, found.Event);
-        return found;
-    }
 
     /// <summary>
     /// The error for a level with more than one event of the name, the counterpart of

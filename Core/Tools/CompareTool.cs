@@ -56,6 +56,8 @@ public static class CompareTool
             throw new ArgumentException($"{nameof(format)} applies only with {nameof(member_name)}.");
         if (!byMember && context != BodyDiff.DefaultContext)
             throw new ArgumentException($"{nameof(context)} applies only with {nameof(member_name)}.");
+        if (byMember && limit != ListOutput.DefaultLimit)
+            throw new ArgumentException($"{nameof(limit)} applies only without {nameof(member_name)}.");
 
         using var leaseA = registry.GetOrLoad(assembly_a);
         using var leaseB = registry.GetOrLoad(assembly_b);

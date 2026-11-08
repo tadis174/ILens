@@ -44,6 +44,11 @@ public static class ListMembersTool
         // name, and an empty answer would read as "it has no members".
         var includeGenerated = include_compiler_generated || CompilerGeneratedFilter.IsCompilerGenerated(type);
 
+        // The members of a C# 14 extension block are listed under their block, as the decompiled
+        // class declares them, and the methods the compiler made of them not among the methods.
+        // Only a static class declares blocks, and it inherits none.
+        var extensions = type.ExtensionInfo;
+
         // A constructor is listed under its type's name, so the filter finds it by that name as
         // well as by its own, .ctor or .cctor, which the other tools print and take.
         bool NameMatches(IEntity entity) =>
@@ -52,28 +57,34 @@ public static class ListMembersTool
             || (entity is IMethod { IsConstructor: true, DeclaringTypeDefinition: { } declaring }
                 && declaring.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase));
 
-        List<(Noun Noun, List<string> Lines)> Groups(AccessibilityFilter visible, bool withGenerated)
+        // Each group is titled by its full count, which a group the limit cuts keeps.
+        List<(string Title, List<string> Lines)> Groups(AccessibilityFilter visible, bool withGenerated)
         {
             bool Passes(IEntity entity) => visible.Permits(entity.Accessibility) && NameMatches(entity);
 
+            var collected = new List<(string Title, List<string> Lines)>();
+            void Add(Noun noun, List<string> lines) => collected.Add((noun.Count(lines.Count), lines));
+
             // The type's own constructors only: C# does not inherit them.
-            var collected = new List<(Noun Noun, List<string> Lines)>();
             if (kindSet.Contains(MemberKind.Method))
-                collected.Add((Noun.Regular("method"), Collect(typesToScan, type,
-                    t => t.DeclaredMethods().Where(m => !m.IsAccessor && (!m.IsConstructor || t.Equals(type))),
-                    Passes, withGenerated)));
+                Add(Noun.Regular("method"), Collect(typesToScan, type,
+                    t => t.DeclaredMethods().Where(m => !m.IsAccessor && (!m.IsConstructor || t.Equals(type))
+                        && extensions?.InfoOfImplementationMember(m) is null),
+                    Passes, withGenerated));
             if (kindSet.Contains(MemberKind.Property))
-                collected.Add((new Noun("property", "properties"), Collect(typesToScan, type, t => t.Properties,
-                    Passes, withGenerated)));
+                Add(new Noun("property", "properties"), Collect(typesToScan, type, t => t.Properties,
+                    Passes, withGenerated));
             if (kindSet.Contains(MemberKind.Field))
-                collected.Add((Noun.Regular("field"), Collect(typesToScan, type, t => t.Fields,
-                    Passes, withGenerated)));
+                Add(Noun.Regular("field"), Collect(typesToScan, type, t => t.Fields,
+                    Passes, withGenerated));
             if (kindSet.Contains(MemberKind.Event))
-                collected.Add((Noun.Regular("event"), Collect(typesToScan, type, t => t.Events,
-                    Passes, withGenerated)));
+                Add(Noun.Regular("event"), Collect(typesToScan, type, t => t.Events,
+                    Passes, withGenerated));
+            if (extensions != null)
+                collected.AddRange(CollectBlocks(extensions, kindSet, visible, NameMatches, withGenerated));
             if (kindSet.Contains(MemberKind.NestedType))
-                collected.Add((new Noun("nested type", "nested types"), CollectNestedTypes(typesToScan, type,
-                    Passes, withGenerated)));
+                Add(new Noun("nested type", "nested types"), CollectNestedTypes(typesToScan, type,
+                    Passes, withGenerated));
             return collected;
         }
         int Count(AccessibilityFilter visible, bool withGenerated) =>
@@ -96,11 +107,11 @@ public static class ListMembersTool
         // The limit counts entries across the groups; a group it cuts keeps its full count, and
         // a group after the cut is left out.
         var shown = 0;
-        foreach (var (noun, lines) in groups.Where(group => group.Lines.Count > 0))
+        foreach (var (title, lines) in groups.Where(group => group.Lines.Count > 0))
         {
             if (shown >= limit)
                 break;
-            sb.Append('\n').Append(noun.Count(lines.Count)).Append(':');
+            sb.Append('\n').Append(title).Append(':');
             foreach (var line in lines.Take(limit - shown))
                 sb.Append("\n  ").Append(line);
             shown += Math.Min(lines.Count, limit - shown);
@@ -198,6 +209,79 @@ public static class ListMembersTool
             .OrderBy(entry => entry.Name, StringComparer.Ordinal)
             .Select(entry => entry.Line)
             .ToList();
+    }
+
+    /// <summary>
+    /// One group for each line a C# 14 extension block opens with, titled by its count and that
+    /// line, <c>3 members of extension(Host host)</c>, sorted by the line. Blocks whose lines read
+    /// alike, such as two that differ only in an attribute on the receiver, which no line writes,
+    /// are one group, as a list merges lines alike. A member is written as the decompiled class
+    /// declares it, and after it, where its name is not theirs, the names of the methods the
+    /// compiler made of it, which the other tools take:
+    /// <c>public int Doubled { get; }  [get_Doubled]</c>. The filters take a member by its own
+    /// kind, accessibility and name, the name filter by its methods' names as well, and count it
+    /// as generated where its methods are, since the class the compiler declares it in is.
+    /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: ExtensionInfo gives each
+    /// block by its marker method, whose one parameter is the receiver, gives a block's members
+    /// as the compiler's grouping class declares them, a property once for its accessors, and
+    /// maps each to the method the compiler made of it (ExtensionGroups, GetMembersOfGroup,
+    /// InfoOfExtensionMember). The cases: ListMembers_ListsABlocksMembersUnderTheBlock and
+    /// ListMembers_ListsBlocksWhoseLinesReadAlikeAsOne in ExtensionBlockTests.
+    /// </remarks>
+    private static IEnumerable<(string Title, List<string> Lines)> CollectBlocks(
+        ExtensionInfo extensions,
+        HashSet<MemberKind> kinds,
+        AccessibilityFilter visible,
+        Func<IEntity, bool> nameMatches,
+        bool includeGenerated)
+    {
+        var blocks = new SortedDictionary<string, List<(IMember Member, List<IMethod> Methods)>>(StringComparer.Ordinal);
+        foreach (var (marker, typeParameters) in extensions.ExtensionGroups)
+        {
+            var block = SignatureFormatter.FormatExtensionBlock(marker, typeParameters);
+            if (!blocks.TryGetValue(block, out var members))
+                blocks[block] = members = [];
+            foreach (var member in extensions.GetMembersOfGroup(marker))
+            {
+                if (!kinds.Contains(member is IProperty ? MemberKind.Property : MemberKind.Method)
+                    || !visible.Permits(member.Accessibility))
+                    continue;
+                IMethod[] declared = member is IProperty property ? [property.Getter, property.Setter] : [(IMethod)member];
+                var methods = declared
+                    .Select(method => TypeWalker.ImplementationOf(extensions, method))
+                    .Where(method => method != null)
+                    .ToList();
+                if (!nameMatches(member) && !methods.Any(nameMatches))
+                    continue;
+                if (!includeGenerated && methods.Count > 0 && methods.All(CompilerGeneratedFilter.IsCompilerGenerated))
+                    continue;
+                members.Add((member, methods));
+            }
+        }
+
+        static string MethodsMark(IMember member, List<IMethod> methods)
+        {
+            var named = methods.Where(method => method.Name != member.Name).ToList();
+            return named.Count == 0
+                ? ""
+                : $"  [{string.Join(", ", named.Select(method => ReferenceFormatter.FormatIdentifier(method.Name)))}]";
+        }
+        var noun = new Noun("member", "members");
+        foreach (var (block, members) in blocks)
+        {
+            var declaration = ReferenceFormatter.Distinguishing(members.Select(entry => entry.Member),
+                SignatureFormatter.FormatMember, member => SignatureFormatter.FormatMember(member, full: true));
+            var lines = members
+                .Select(entry => (entry.Member, Line: ObsoleteMark(entry.Member) + declaration(entry.Member)
+                    + MethodsMark(entry.Member, entry.Methods)))
+                .OrderBy(entry => entry.Member.Name, StringComparer.Ordinal)
+                .ThenBy(entry => entry.Line, StringComparer.Ordinal)
+                .Select(entry => entry.Line)
+                .ToList();
+            yield return ($"{noun.Count(lines.Count)} of {block}", lines);
+        }
     }
 
     private static string ObsoleteMark(IEntity entity) =>

@@ -1,13 +1,12 @@
 # Measure the real token cost of inspecting a .NET assembly with ILens versus
 # the "dump the whole file" baseline, and write the numbers to
-# doc/why-ilens-stats.json. The /doc skill reads that artifact to build the
-# user guide's "Why ILens" comparison table, so the table shows measured
-# figures instead of estimates.
+# doc/why-ilens-stats.json. The user guide's "Why ILens" comparison table is
+# built from that artifact, so the table shows measured figures instead of
+# estimates.
 #
-# Invoked automatically by /doc in stats-consuming modes (--user, --readme,
-# --public and no-arg), so the bundled docs always ship with a current measurement
-# timestamp. /doc --dev skips it (the dev guide doesn't carry the table).
-# Can still be run by hand for ad-hoc re-measurement — the artifact is committed.
+# Run it before each update of the user guide, so the bundled docs always ship
+# with a current measurement timestamp, or by hand for an ad-hoc re-measurement;
+# the artifact is committed.
 #
 # Modes:
 #   (no args)          Inner loop: build Core (Release) and measure that build
@@ -18,7 +17,8 @@
 # baseline. ilspycmd is the ICSharpCode decompiler CLI; ILens bundles the same
 # engine, so the comparison reflects scope, not tool choice.
 #
-# Exit codes: 0 = artifact written, 2 = setup/build problem.
+# Exit codes: 0 = artifact written, 1 = an error ended the run, such as a tool
+# call ILens did not answer, 2 = setup/build problem. Only 0 writes the artifact.
 
 param(
     [string]$ILensExe

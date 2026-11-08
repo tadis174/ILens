@@ -17,8 +17,9 @@
     default changes, beside an enum numbered anew under a default, classes
     whose name stands for a class with other type parameters in the twin,
     a generic class named like a class of the core library that the twin
-    references, and methods without a body in both, one of them abstract here
-    and extern in the twin. The language version is the latest, so the generated names include
+    references, methods without a body in both, one of them abstract here
+    and extern in the twin, and classes whose base class or interface, which
+    the framework defines, gives way to another of the framework's. The language version is the latest, so the generated names include
     those that newer compilers emit. Not consumed by Tests' source code; only its compiled
     output is inspected by the ILens server during the e2e suite.
   -->

@@ -646,7 +646,7 @@ public sealed class ExtensionMethodTests : IClassFixture<ILensServerFixture>, IC
             Path.Combine(rootB, "ExternalLib.dll"));
         try
         {
-            await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            await using var client = await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = "ILens-two-library-versions",
                 Command = ILensServerFixture.ResolveILensExecutable(),
@@ -986,7 +986,7 @@ public sealed class ExtensionMethodTests : IClassFixture<ILensServerFixture>, IC
             Path.Combine(rootB, "ExternalLib.dll"));
         try
         {
-            await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            await using var client = await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = "ILens-two-library-versions",
                 Command = ILensServerFixture.ResolveILensExecutable(),
@@ -1026,7 +1026,7 @@ public sealed class ExtensionMethodTests : IClassFixture<ILensServerFixture>, IC
         string b = KindShiftAssembly.Write(rootB, withProperty: false, library);
         try
         {
-            await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            await using var client = await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = "ILens-kind-shift",
                 Command = ILensServerFixture.ResolveILensExecutable(),
@@ -1044,7 +1044,7 @@ public sealed class ExtensionMethodTests : IClassFixture<ILensServerFixture>, IC
                 "// " + NotChecked("ExternalLib.Widget", "Shine") + "\n" +
                 "// Shop.Gauge.Shine is a property in A and an extension method in B: " +
                 "public int Shine { get; } → public static int Shine(this Gauge gauge)\n\n",
-                text.Replace("\r\n", "\n"));
+                text);
         }
         finally
         {
@@ -1155,7 +1155,7 @@ public sealed class ExtensionMethodTests : IClassFixture<ILensServerFixture>, IC
             Path.Combine(rootB, "ExternalLib.dll"));
         try
         {
-            await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            await using var client = await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = "ILens-two-library-versions",
                 Command = ILensServerFixture.ResolveILensExecutable(),
@@ -1430,7 +1430,7 @@ public sealed class ExtensionMethodTests : IClassFixture<ILensServerFixture>, IC
         AccessLibraryAssembly.Write(root, grants);
         try
         {
-            await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            await using var client = await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = "ILens-access-library",
                 Command = ILensServerFixture.ResolveILensExecutable(),
@@ -1472,7 +1472,7 @@ public sealed class ExtensionMethodTests : IClassFixture<ILensServerFixture>, IC
         AccessLibraryAssembly.Write(root, grants: false);
         try
         {
-            await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            await using var client = await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = "ILens-access-library",
                 Command = ILensServerFixture.ResolveILensExecutable(),

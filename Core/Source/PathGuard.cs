@@ -117,7 +117,9 @@ public sealed class PathGuard
     /// Whether the decompiler may open a file it found for an assembly reference. A file under an
     /// allowed root must resolve inside one, as a requested path must, so a link planted in a root
     /// cannot point the decompiler at a file outside every root. A file outside every root is one
-    /// the search for the installed .NET libraries found, which is not this class's concern.
+    /// the resolver found among the installed .NET libraries, in the Global Assembly Cache, among
+    /// the Windows metadata files or in a NuGet package folder a .deps.json names, which is not
+    /// this class's concern.
     /// </summary>
     public bool AdmitsReference(string path)
     {

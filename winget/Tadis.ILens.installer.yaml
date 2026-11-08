@@ -3,12 +3,13 @@
 # Winget installer manifest for ILens.
 # Forward-pointing: PackageVersion + InstallerUrl reflect the *next* release
 # (matching Core/Core.csproj <Version>). InstallerSha256 is left as 64 zeros at
-# HEAD; `wingetcreate update` computes and substitutes the real SHA at
-# submission time, and the real value never lands back in git.
-# Submission: the /publish skill's report step runs the wingetcreate command.
+# HEAD. No submission reads this file: a release is submitted with
+# `wingetcreate update`, which starts from the package's manifests in
+# microsoft/winget-pkgs and computes the real SHA from the release ZIP, so the
+# real value never lands in git.
 
 PackageIdentifier: Tadis.ILens
-PackageVersion: 12
+PackageVersion: 13
 InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
@@ -16,8 +17,7 @@ NestedInstallerFiles:
     PortableCommandAlias: ilens
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/tadis174/ILens/releases/download/v12/ILens-windows-x64.zip
+    InstallerUrl: https://github.com/tadis174/ILens/releases/download/v13/ILens-windows-x64.zip
     InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
-ReleaseDate: 2026-01-01
 ManifestType: installer
 ManifestVersion: 1.10.0

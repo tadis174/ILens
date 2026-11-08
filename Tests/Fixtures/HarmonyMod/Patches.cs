@@ -583,8 +583,8 @@ namespace HarmonyMod
         static void Prefix() { }
     }
 
-    // Pattern 24: the same in Harmony's extension spelling, which ILSpy writes as an extension
-    // call only when it finds HarmonyLib, so the scanner meets both forms.
+    // Pattern 24: the same in Harmony's extension spelling, which the scanner reads as a static
+    // call whether or not ILSpy finds HarmonyLib.
     [HarmonyPatch]
     static class PartlyReadExtensionsPatch
     {

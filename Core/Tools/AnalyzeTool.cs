@@ -62,6 +62,12 @@ public static class AnalyzeTool
             throw new ArgumentException(
                 $"{nameof(parameter_name)} and {nameof(non_default_only)} apply only to kind " +
                 $"'{AnalysisKind.CallSites.ToSchemaName()}'.");
+        // call_sites reports a call in generated code under the member written in source, so the
+        // switch has nothing to add there.
+        if (kind == AnalysisKind.CallSites && include_compiler_generated)
+            throw new ArgumentException(
+                $"{nameof(include_compiler_generated)} does not apply to kind " +
+                $"'{AnalysisKind.CallSites.ToSchemaName()}'.");
         if (string.IsNullOrEmpty(member_name) && hint.IsGiven)
             throw new ArgumentException(
                 $"{nameof(parameter_count)}, {nameof(parameter_types)} and {nameof(return_type)} select a " +
@@ -195,9 +201,7 @@ public static class AnalyzeTool
         // AppliedTo asks "what is this attribute applied to?" — only meaningful for an
         // Attribute-derived type. ValidateKind checks only the symbol category (Type),
         // not attribute-ness; without this check a non-attribute type would yield an
-        // empty result indistinguishable from "applied nowhere". This guard is specific
-        // to AppliedTo: its name presupposes the input kind and the precondition is a
-        // crisp base-type check, unlike the murkier preconditions of the other kinds.
+        // empty result indistinguishable from "applied nowhere".
         // A base class ILens cannot load leaves the check open; the question is then
         // answered, and an empty answer says below that the type was not checked.
         UnreadBase uncheckedBase = null;
@@ -212,8 +216,8 @@ public static class AnalyzeTool
         }
 
         // ImplementedBy on a type only makes sense for an interface. The same empty-result
-        // ambiguity as AppliedTo applies — "implementers of System.String" would silently
-        // return nothing — and the precondition is again a crisp kind check.
+        // ambiguity as AppliedTo applies: "implementers of System.String" would silently
+        // return nothing.
         if (kind == AnalysisKind.ImplementedBy && category == SymbolCategory.Type
             && type.Kind != TypeKind.Interface)
             throw new ArgumentException(

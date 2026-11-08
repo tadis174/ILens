@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ILens 11 — User Guide</title>
+<title>ILens 12 — User Guide</title>
 <style>
 :root {
   --brand-green:        #008800;
@@ -151,7 +151,7 @@ ul.tight li { margin: 0.3rem 0; }
   </div>
   <div class="header-text">
     <h1>ILens</h1>
-    <p class="version">Version 11 — user guide</p>
+    <p class="version">Version 12 — user guide</p>
     <p class="tagline">MCP server for inspecting .NET assemblies</p>
   </div>
 </div>
@@ -193,8 +193,8 @@ generic <code>Bash</code> tool. Both dump an entire file as text. That output st
 agent's context as input tokens and is sent again on every later turn, so inspecting a single
 class can cost thousands of tokens, and the cost recurs for the rest of the session.</p>
 
-<p>The target measured below is <code>ICSharpCode.Decompiler.dll</code> 9.1.0.7988, a 2.4 MB
-assembly with 741 public types. A full decompile of it costs the same however narrow the
+<p>The target measured below is <code>ICSharpCode.Decompiler.dll</code> 11.2.0.10050, a 3.0 MB
+assembly with 749 public types. A full decompile of it costs the same however narrow the
 question is, which is why the baseline column repeats.</p>
 
 <table>
@@ -202,14 +202,14 @@ question is, which is why the baseline column repeats.</p>
 <tr><th>Task</th><th class="num"><code>ilspycmd</code> cost</th><th>ILens tool</th><th class="num">ILens cost</th></tr>
 </thead>
 <tbody>
-<tr><td>List the public types in a namespace</td><td class="num">1,041,476 tokens</td><td><code>find_types</code></td><td class="num">1,109 tokens</td></tr>
-<tr><td>See the API surface of one mid-sized class</td><td class="num">1,041,476 tokens</td><td><code>list_members</code></td><td class="num">562 tokens</td></tr>
-<tr><td>Find which types expose a given method</td><td class="num">1,041,476 tokens</td><td><code>find_methods</code></td><td class="num">526 tokens</td></tr>
+<tr><td>List the public types in a namespace</td><td class="num">1,240,053 tokens</td><td><code>find_types</code></td><td class="num">987 tokens</td></tr>
+<tr><td>See the API surface of one mid-sized class</td><td class="num">1,240,053 tokens</td><td><code>list_members</code></td><td class="num">692 tokens</td></tr>
+<tr><td>Find which types expose a given method</td><td class="num">1,240,053 tokens</td><td><code>find_methods</code></td><td class="num">668 tokens</td></tr>
 </tbody>
 </table>
 
-<p class="caption">Measured against <code>ICSharpCode.Decompiler.dll</code> 9.1.0.7988 on
-2026-10-31; token figures are character counts divided by 4, not a real tokenizer.</p>
+<p class="caption">Measured against <code>ICSharpCode.Decompiler.dll</code> 11.2.0.10050 on
+2026-11-08; token figures are character counts divided by 4, not a real tokenizer.</p>
 
 <p>ILens turns assembly inspection into bounded, targeted lookups instead of full-file dumps —
 which is what makes it cheap enough to leave registered as an always-available tool.</p>
@@ -431,12 +431,12 @@ that line; a negative limit counts as 0. Lists are sorted by the name they print
 and the order stays stable across builds of the inspected assembly. Every answer is plain text.
 <code>find_types</code> on <code>ICSharpCode.Decompiler.dll</code> with <code>namespace</code>
 <code>ICSharpCode.Decompiler.Metadata</code> and <code>limit</code> 3:</p>
-<pre><code>41 types:
+<pre><code>44 types:
 ICSharpCode.Decompiler.Metadata.AssemblyNameReference
 ICSharpCode.Decompiler.Metadata.AssemblyReference
 ICSharpCode.Decompiler.Metadata.AssemblyReferenceClassifier
-... (38 more; raise limit to see all)
-Not shown: 9 internal or private</code></pre>
+... (41 more; raise limit to see all)
+Not shown: 12 internal or private</code></pre>
 <p>The last line is the one <code>find_types</code>, <code>find_methods</code> and
 <code>list_members</code> end with when their accessibility filter left matches out, so that a
 list without a private member does not read as "the type has none"; with
@@ -602,12 +602,16 @@ backing fields and the other fields a compiler adds beside the member they belon
 an enum keeps its value in, <code>&lt;PrivateImplementationDetails&gt;</code>, and Unity and
 Burst source-generator output. A generated type named by <code>type_name</code> is listed or
 searched whatever the switch says, in <code>list_members</code>, <code>find_methods</code> and
-<code>search_code</code>, since it was asked for by name, and <code>analyze</code> lists generated
-results when the symbol it is asked about is generated itself: the member where
-<code>member_name</code> is given, and the type otherwise. Code the compiler moves out of the
-method it is written in, a lambda, a local function, an iterator or an async method, is reported
-under that method by <code>analyze</code> and <code>search_code</code> and compared as part of it
-by <code>compare</code>.</p>
+<code>search_code</code>, since it was asked for by name; <code>search_code</code> searches it where
+the decompiler writes it as a type of its own. In <code>search_code</code>, a nested type the
+decompiler writes inside the type around it, such as a lambda's class or an iterator's or async
+method's state machine, has no lines of its own in the decompiled code, so naming it in
+<code>type_name</code> is an error that names the nearest type around it with lines of its own,
+whose search finds its contents. <code>analyze</code> lists generated results when the symbol it
+is asked about is generated itself: the member where <code>member_name</code> is given, and the
+type otherwise. Code the compiler moves out of the method it is written in, a lambda, a local
+function, an iterator or an async method, is reported under that method by <code>analyze</code>
+and <code>search_code</code> and compared as part of it by <code>compare</code>.</p>
 
 <p id="conv-accessibility"><strong>Accessibility.</strong> The tools that list API,
 <code>find_types</code>, <code>find_methods</code> and <code>list_members</code>, take
@@ -668,16 +672,22 @@ says.</li>
 reference assembly holds a library's declarations without their code: a .NET reference pack, a
 .NET Framework reference assembly, a compiler's reference assembly, or a copy made for building
 against, such as a publicized assembly in a build folder. Its method bodies are placeholders, so a
-question that reads code is refused there rather than answered from them as "nothing uses it":
+question that reads code is refused there rather than answered from them, where "nothing uses it"
+would read as a fact about the library and a placeholder as the member's code:
 <code>analyze</code> with <code>used_by</code>, <code>instantiated_by</code>,
 <code>read_by</code>, <code>assigned_by</code>, <code>call_sites</code> or <code>uses</code>,
-<code>search_code</code>, and <code>find_harmony_dependencies</code>. The error says where to ask
-instead, here for <code>System.Collections.dll</code> of the .NET 10 reference pack:</p>
+<code>decompile</code>, <code>search_code</code>, and <code>find_harmony_dependencies</code>. The
+error says where to ask instead, here for <code>System.Collections.dll</code> of the .NET 10
+reference pack:</p>
 <pre><code>Error: ArgumentException: This assembly is a reference assembly, which holds a library's declarations without their code, so 'used_by' cannot be answered from it; ask the build the library runs as. exposed_by, extension_methods, applied_to, overridden_by, implemented_by and implements read declarations alone and answer here.</code></pre>
-<p>The build the library runs as is the one the runtime loads, such as the library of the same
-name in the installed .NET's <code>shared</code> folder for a .NET reference pack. The questions
-that read declarations alone answer as for any assembly, and <code>compare</code> compares no
-body of a reference assembly and says so beneath its lists.</p>
+<p><code>decompile</code> answers, for a whole type and for any member alike: <code>This assembly
+is a reference assembly, which holds a library's declarations without their code, so there is no
+code to decompile; ask the build the library runs as. find_methods and list_members read
+declarations alone and answer here.</code> <code>search_code</code> answers the same, with
+<code>no code to search</code>. The build the library runs as is the one the runtime loads, such
+as the library of the same name in the installed .NET's <code>shared</code> folder for a .NET
+reference pack. The questions that read declarations alone answer as for any assembly, and
+<code>compare</code> compares no body of a reference assembly and says so beneath its lists.</p>
 
 <p id="conv-strict"><strong>Strict arguments.</strong> An argument name a tool does not declare
 is rejected with the list of valid names. A parameter that does not apply to the question asked
@@ -824,13 +834,13 @@ machines. Default <code>false</code>. See <a href="#conv-generated">generated co
 <p>A count line, then one fully qualified type name per line, sorted, in the form
 <code>type_name</code> takes. Asked of <code>ICSharpCode.Decompiler.dll</code> with
 <code>namespace</code> <code>ICSharpCode.Decompiler.TypeSystem</code> and <code>limit</code> 2:</p>
-<pre><code>87 types:
+<pre><code>79 types:
 ICSharpCode.Decompiler.TypeSystem.Accessibility
 ICSharpCode.Decompiler.TypeSystem.AccessibilityExtensions
-... (85 more; raise limit to see all)
-Not shown: 6 internal or private</code></pre>
+... (77 more; raise limit to see all)
+Not shown: 8 internal or private</code></pre>
 <p>The last line counts the types the <code>accessibility</code> filter left out; with
-<code>accessibility</code> <code>public</code> it reads <code>Not shown: 6 non-public</code>. An
+<code>accessibility</code> <code>public</code> it reads <code>Not shown: 8 non-public</code>. An
 empty answer counts the compiler-generated types as well and names the settings that list
 everything it counts. Asked of <code>CallShapes.dll</code>, one of the test assemblies in ILens's
 repository, for the namespace <code>CallShapes.Concealed</code>, whose one type is internal and
@@ -934,8 +944,9 @@ parameter's default. Default <code>false</code>.</dd>
 <dt><code>include_compiler_generated</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
 <dd>Include results the compiler or a source generator created, such as names starting with
 <code>&lt;</code>. Default <code>false</code>. When the symbol asked about is itself
-compiler-generated, the answer lists such results without it. See
-<a href="#conv-generated">generated code</a>.</dd>
+compiler-generated, the answer lists such results without it. Does not apply to kind
+<code>call_sites</code>, which reports a call in generated code under the member it was written
+in. See <a href="#conv-generated">generated code</a>.</dd>
 <dt><code>limit</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
 <dd>Maximum number of results to list; for <code>call_sites</code>, of calls. Default 100.</dd>
 </dl>
@@ -1359,8 +1370,8 @@ constant in ExternalLib: ...</code></li>
 kind 'used_by' for every call site of the property.</code></li>
 <li>A property or event that declares no accessors, which only malformed metadata produces:
 <code>... declares no accessors, so it has no call sites to analyze.</code></li>
-<li><code>parameter_name</code> or <code>non_default_only</code> with a kind other than
-<code>call_sites</code>: <code>parameter_name and non_default_only apply only to kind
+<li>A parameter given with a kind it does not apply to: <code>parameter_name and non_default_only
+apply only to kind 'call_sites'.</code>, <code>include_compiler_generated does not apply to kind
 'call_sites'.</code>; <code>non_default_only</code> without <code>parameter_name</code>:
 <code>non_default_only needs parameter_name: it compares the argument passed for that parameter
 with the parameter's default.</code>; a <code>parameter_name</code> no overload has:
@@ -1749,8 +1760,8 @@ code</a>.</dd>
 <h4>Returns</h4>
 <p>A header with the total and the type's heading as C# declares it, then a count line per
 non-empty kind and its members, sorted by name with constructors first. The groups stand in the
-order methods, properties, fields, events, nested types. Asked of <code>BaseShift.dll</code>, one
-of the test assemblies in ILens's repository:</p>
+order methods, properties, fields, events, extension blocks, nested types. Asked of
+<code>BaseShift.dll</code>, one of the test assemblies in ILens's repository:</p>
 <pre><code>5 members of public class BaseShift.Gauge:
 1 method:
   public Gauge()
@@ -1826,6 +1837,28 @@ test assembly:</p>
   public int Count { get; }
 1 event:
   public event EventHandler Moved</code></pre>
+<p><strong>Extension blocks.</strong> A class that declares C# 14 extension blocks lists the
+members of each block under a count line that names the block,
+<code>5 members of extension(Gauge gauge):</code>, each member as the decompiled class declares
+it. A property is followed by the names of the methods the compiler made of its accessors, in
+brackets, which the other tools take: <code>public int Doubled { get; }  [get_Doubled]</code>.
+The methods the compiler made of the blocks' members are not listed among the methods. Two blocks
+whose lines read alike, such as two for one receiver that differ only in an attribute on it, share
+one group. <code>kinds</code> takes a block's member by its own kind, so <code>property</code>
+lists <code>Doubled</code>, and <code>name_contains</code> finds a block's property by the names
+of its accessors' methods as well. Asked of <code>InterfaceShapes.dll</code>, where
+<code>IsZero</code> stands in a second block for <code>Gauge</code> whose receiver carries an
+attribute:</p>
+<pre><code>6 members of public static class InterfaceShapes.Language.GaugeExtensions:
+5 members of extension(Gauge gauge):
+  public int Doubled { get; }  [get_Doubled]
+  public static Gauge Empty()
+  public bool IsZero()
+  public int Offset { get; set; }  [get_Offset, set_Offset]
+  public void Reset()
+1 member of extension&lt;T&gt;(List&lt;T&gt; readings) where T : IComparable&lt;T&gt;:
+  public T First()
+Not shown: 1 internal or private</code></pre>
 <p><strong>Fields a compiler adds.</strong> The fields a compiler adds beside the member they
 belong to are left out unless <code>include_compiler_generated</code> is set: the field that
 holds an event's subscribers, Visual Basic's field for an auto-property or a
@@ -1922,13 +1955,29 @@ generic method carries its type parameters, <code>CallShapes.Namesakes.Store.Get
 member of the type would read alike in that short form, the comment writes every type with its
 namespace: <code>CallShapes.Namesakes.Basket.Take(CallShapes.Namesakes.Beta.Badge) → void</code>,
 beside a <code>Take</code> that takes the <code>Badge</code> of another namespace.</p>
-<p>A method or an accessor gives its body. A property or event name gives the whole declaration
+<p>A method gives its body. A property or event name gives the whole declaration
 with its accessor bodies, and a field name the field's declaration with the initializer the
 compiler moved into the constructors: on <code>BaseShift.dll</code>,
 <code>BaseShift.Fields.Gauge.Size</code> gives <code>public int Size = 5;</code>. A member that
 implements an interface member explicitly is reached by the interface member's plain name when no
 ordinary member has that name, and the comment names it in full:
 <code>// ExplicitMembers.Circle.ExplicitMembers.IShape.Area() → double</code>.</p>
+<p>An accessor, <code>get_X</code>, <code>set_X</code>, <code>add_X</code> or
+<code>remove_X</code>, gives its part of the declaration of the property, indexer or event that
+owns it, with the using lines the whole declaration needs: an auto-property's getter reads
+<code>get;</code>, an init setter <code>init;</code>, and an accessor of a property written with
+C# 14's <code>field</code> keyword writes <code>field</code> for the backing field the compiler
+declares. An accessor the declaration does not write, such as an accessor of a field-like event or
+the getter of a property written with <code>=&gt;</code>, comes on its own, with its body. Asked
+of <code>InterfaceShapes.dll</code> for <code>get_Level</code> on
+<code>InterfaceShapes.Language.Gauge</code>, whose setter calls <code>Math.Max</code>:</p>
+<pre><code>// InterfaceShapes.Language.Gauge.get_Level() → int
+using System;
+
+get
+{
+	return field;
+}</code></pre>
 <p><strong>Where a member was found.</strong> When the type asked about does not declare the
 member, the comment ends with a mark. <code>[inherited from X]</code> names the base class that
 declares it. <code>[extension method on X]</code> marks an extension method found from the type
@@ -1968,6 +2017,34 @@ public static void Boil(this Kettle kettle)
 reasons are under <a href="#conv-other-assemblies">types from other assemblies</a>. A member that
 a base class from another assembly declares is not decompiled here: the error names the file
 that holds it.</p>
+<p><strong>A whole type.</strong> A top-level type comes with its using lines, its namespace and
+its nested types. A nested type comes alone, under a comment that names it,
+<code>// SearchText.Outer.Inner</code>, with the using lines it needs and without the types around
+it. A type the compiler generates for a lambda, an iterator or an async method, which the
+decompiler writes into a method of the class around it, comes alone in the same way, as the
+compiler generated it: with its fields and the methods that hold the code, such as
+<code>&lt;InCapturingLambda&gt;b__0()</code> or the iterator's <code>MoveNext()</code>. Asked of
+<code>SearchText.dll</code>, a test assembly, for the class of a lambda that captures a
+variable:</p>
+<pre><code>// SearchText.Shapes.&lt;&gt;c__DisplayClass1_0
+using System.Runtime.CompilerServices;
+
+[CompilerGenerated]
+private sealed class &lt;&gt;c__DisplayClass1_0
+{
+	public string where;
+
+	internal void &lt;InCapturingLambda&gt;b__0()
+	{
+		Marker.Hit(where + " captured");
+	}
+}</code></pre>
+<p>A top-level type the decompiler leaves out of the code it writes comes the same way, as the
+compiler generated it, under a comment that names it: the class that holds the compiler's
+helpers, <code>&lt;PrivateImplementationDetails&gt;</code>, with the data of constant arrays and
+the structs nested in it; an anonymous type such as <code>&lt;&gt;f__AnonymousType0&lt;,&gt;</code>,
+with its properties and its <code>Equals</code>; and a <code>&lt;Module&gt;</code> without
+members, as <code>internal class &lt;Module&gt;</code> with empty braces.</p>
 <h4>Errors</h4>
 <p>The messages shared with <code>analyze</code> and <code>compare</code> are explained under
 <a href="#troubleshooting">Troubleshooting</a>.</p>
@@ -1992,7 +2069,11 @@ where it is created</code>, <code>; an enum has no constructor</code>, <code>; i
 constructor is named '.cctor'</code>, <code>; its indexer is named Entry: ...get_Entry(int),
 ...set_Entry(int, int)</code> for <code>Item</code>, <code>get_Item</code> or
 <code>set_Item</code>, <code>; the methods named Run are ...</code> for a count of type
-parameters no method has, or that a base class ILens could not load was not searched.</li>
+parameters no method has, or that a base class ILens could not load was not searched. For the
+name of a property of a C# 14 extension block, which the class holds only as the methods the
+compiler made of its accessors, the message ends with those methods, the ones to ask instead:
+<code>; Doubled is a property of an extension block: ...get_Doubled(Gauge)</code>. A method of an
+extension block is found by its own name.</li>
 <li>No member of the name through an array type: <code>Member 'Nope' not found on
 System.Int32[]: no public instance member of System.Array or System.Object and no extension
 method of this assembly that applies to it has that name.</code> Where the element type's
@@ -2012,12 +2093,18 @@ types written as listed, or say that the candidates cannot be narrowed further.<
 several indexers (<code>Property 'Entry' on ... has 2 overloads — ...</code>; name an accessor
 with <code>parameter_types</code>), several explicit interface implementations (<code>'...' on
 ... names 2 explicit interface implementations: ... Pass the full name of one instead.</code>),
-or several events in non-C# metadata.</li>
+or several events in non-C# metadata (<code>Event '...' on ... has 2 entries with the same name —
+non-C# metadata. Candidates: ...</code>).</li>
 <li>An accessor name whose property or event lacks that accessor: <code>Property 'Text' on
 BaseShift.Sides.Banner has no setter.</code>, or <code>Event '...' on ... has no add
 accessor.</code></li>
 <li>The member is declared on a base class another assembly defines: <code>... inherits ... from
 a base class this assembly does not define; ... comes from &lt;file&gt;.</code></li>
+<li>A reference assembly, whose method bodies are placeholders, is refused before any name is
+looked up, for a whole type and for any member alike: <code>This assembly is a reference assembly,
+which holds a library's declarations without their code, so there is no code to decompile; ask the
+build the library runs as. find_methods and list_members read declarations alone and answer
+here.</code> See <a href="#conv-reference-assemblies">reference assemblies</a>.</li>
 </ul>
 <h4>See also</h4>
 <p><code>list_members</code> first, to see what a type has without paying for bodies;
@@ -2046,7 +2133,8 @@ searched.</dd>
 <dt><code>include_compiler_generated</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
 <dd>Search the types and members the compiler generated as well; see
 <a href="#conv-generated">generated code</a>. Default <code>false</code>. A generated type that
-<code>type_name</code> names is searched either way.</dd>
+<code>type_name</code> names is searched either way where the decompiler writes it as a type of
+its own, such as <code>&lt;&gt;z__ReadOnlyArray&lt;&gt;</code>.</dd>
 <dt><code>limit</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
 <dd>Maximum number of matching lines to list. Default 100.</dd>
 </dl>
@@ -2061,7 +2149,8 @@ SearchText.Reader.Load(string)
   catch (Exception ex2)
 SearchText.Reader.TryParse(string, out int)
   catch (FormatException)</code></pre>
-<p>A line reads as <code>decompile</code> prints it, without its indentation: the source names the
+<p>A line reads as <code>decompile</code> prints the top-level type that holds it, without its
+indentation: the source names the
 second variable <code>ex</code>, the decompiled code <code>ex2</code>. A member is named in the
 reference form the other tools take, see <a href="#conv-names">names</a>. The header ends
 <code>in namespace &lt;name&gt;</code> for a namespace and names no scope for the whole assembly.
@@ -2082,6 +2171,18 @@ SearchText.Settings
   public class Settings : IDisposable
 SearchText.Settings.Retries
   public int Retries = 3;</code></pre>
+<p>The comments the decompiler writes above a declaration stand under that declaration: its
+documentation, where an XML documentation file lies beside the assembly, a member's under the
+member and a type's under the type, and notes of its own, such as <code>// C# has no syntax for
+parameterized property 'Cell'.</code> above the method it writes for the getter of a Visual Basic
+property that takes a parameter and is not its class's default, since C# cannot declare one. A
+C# 14 extension block reads as <code>decompile</code> writes its class, and a line of a block's
+member stands under the method the compiler made of it, whose name the other tools take: an
+accessor's lines under its accessor's method, and a property's other lines under its getter's, or
+its setter's where it has none. The block's own lines, <code>extension(Gauge gauge)</code> and its
+braces, stand under the class. On the test assembly <code>InterfaceShapes.dll</code>, the line
+<code>public int Doubled =&gt; gauge.Level * 2;</code> stands under
+<code>InterfaceShapes.Language.GaugeExtensions.get_Doubled(Gauge)</code>.</p>
 <p><strong>One line at a time.</strong> The pattern sees each line on its own, without its
 indentation, so <code>^</code> stands before the first character of the code and a match never
 spans two lines. A statement the decompiler prints over several lines, such as an object creation
@@ -2094,7 +2195,16 @@ with one second for each line.</p>
 <p><strong>Generated code.</strong> Without <code>include_compiler_generated</code>, the types and
 members the compiler generated are neither searched nor decompiled. The code the compiler moves
 out of a method, such as a lambda or an iterator, is searched either way, under the method it is
-written in, since the decompiled C# shows it there.</p>
+written in, since the decompiled C# shows it there. The class that holds the compiler's helpers,
+<code>&lt;PrivateImplementationDetails&gt;</code>, a struct nested in it, an anonymous type and
+<code>&lt;Module&gt;</code> are searched as the compiler generated them where
+<code>type_name</code> names them, and in a search of the whole assembly only with
+<code>include_compiler_generated</code>, as any generated type is. A nested type the decompiler
+writes inside the type around it, such as a lambda's class, the class that caches the lambdas that
+capture nothing, an iterator's or async method's state machine, or a C# 14 extension block's
+grouping class, has no lines of its own in the decompiled code, so naming it in
+<code>type_name</code> is an error that names the nearest type around it with lines of its own,
+whose search finds its contents.</p>
 <p><strong>The first search.</strong> A search decompiles the types of its scope that no earlier
 search decompiled, and keeps their text in the server's memory, so later searches of the assembly,
 in any scope, answer from that text. On a large assembly, the first search over everything takes
@@ -2103,12 +2213,13 @@ limit the startup option <code>--max-search-seconds</code> sets, see
 <a href="#integrate">Integrating with Claude Code</a>. An unfinished call answers with how far it
 came and with no match, and repeating the call goes on from there. On
 <code>ICSharpCode.Decompiler.dll</code>, with the server started with
-<code>--max-search-seconds 5</code>, the first three calls of one search over the whole assembly
+<code>--max-search-seconds 5</code>, the first four calls of one search over the whole assembly
 answered:</p>
-<pre><code>Not finished: 379 of 862 types decompiled. Repeat the call to continue; what is done is kept.
-Not finished: 557 of 862 types decompiled. Repeat the call to continue; what is done is kept.
-Not finished: 694 of 862 types decompiled. Repeat the call to continue; what is done is kept.</code></pre>
-<p>The fourth call answered with the matches after 2 seconds, and the same search then took about
+<pre><code>Not finished: 296 of 888 types decompiled. Repeat the call to continue; what is done is kept.
+Not finished: 527 of 888 types decompiled. Repeat the call to continue; what is done is kept.
+Not finished: 664 of 888 types decompiled. Repeat the call to continue; what is done is kept.
+Not finished: 871 of 888 types decompiled. Repeat the call to continue; what is done is kept.</code></pre>
+<p>The fifth call answered with the matches after 1 second, and the same search then took about
 a tenth of a second. The numbers count the top-level types of the scope. Every call finishes at
 least one type, so each repeat gets further. A second search of the same assembly while one
 decompiles waits for it within its own time limit.</p>
@@ -2140,6 +2251,10 @@ whose share is 1 MB: <code>The decompiled text of ICSharpCode.Decompiler.dll nee
 ...</code>, or for an array type <code>byte[] is an array type, which only analyze with kind
 'extension_methods' and decompile, analyze and compare with member_name take, ...</code>; see
 <a href="#troubleshooting">Troubleshooting</a>.</li>
+<li><code>type_name</code> names a nested type the decompiler writes inside the type around it,
+see <em>Generated code</em>, here a lambda's class of <code>SearchText.Shapes</code>:
+<code>SearchText.Shapes.&lt;&gt;c__DisplayClass1_0 has no declaration of its own in the decompiled
+code of SearchText.Shapes, where a search finds its contents.</code></li>
 <li>A reference assembly, whose method bodies are placeholders: <code>This assembly is a reference
 assembly, which holds a library's declarations without their code, so there is no code to search;
 ask the build the library runs as. find_methods and list_members read declarations alone and
@@ -2204,7 +2319,8 @@ code</a>.</dd>
 shows it whole with each change marked, and a negative number counts as 0. Applies only with
 <code>member_name</code>.</dd>
 <dt><code>limit</code> <span class="badge badge-optional">optional</span> <code>int</code></dt>
-<dd>Maximum number of changes to list. Default 100.</dd>
+<dd>Maximum number of changes to list. Default 100. Applies only without
+<code>member_name</code>.</dd>
 </dl>
 <h4>Returns</h4>
 <p>A line of a list starts with <code>+</code> for what only B has, <code>-</code> for what only
@@ -2231,7 +2347,9 @@ purpose.</p>
 its kind and accessibility, the words before its name (static, abstract, sealed, readonly, ref,
 record), its base class or an enum's underlying type, its interfaces, and its own type
 parameters, with their number, their <code>in</code> or <code>out</code> and their conditions. A
-renamed type parameter or a reordered where clause alone is no change.</li>
+base class or interface that gives way to another one is marked, whichever assembly defines it. A
+renamed type parameter or a reordered where clause alone is no change, and neither is a base class
+or interface that keeps its name and only moves to another assembly.</li>
 <li><code>members</code>: a member that only one build has.</li>
 <li><code>declarations</code>: a member that keeps its name, parameter types and return type and
 whose declaration line reads otherwise.</li>
@@ -2496,7 +2614,8 @@ names the method marks with <code>(via X$BurstManaged)</code>.</p>
 <code>parameter_count, parameter_types and return_type select a method overload, so they need
 member_name.</code>, <code>namespace applies only without type_name.</code>,
 <code>include_compiler_generated applies only without member_name.</code>, <code>format applies
-only with member_name.</code>, <code>context applies only with member_name.</code></li>
+only with member_name.</code>, <code>context applies only with member_name.</code>,
+<code>limit applies only without member_name.</code></li>
 <li><code>namespace</code> names a namespace neither assembly has: <code>Namespace not found in
 either assembly: ...</code></li>
 <li>The type is in neither assembly: <code>Type 'Ledger' not found in either assembly. Types named
@@ -2587,15 +2706,19 @@ names.</p>
 does not have, a number or several comma-separated names for a parameter with listed values, or
 text that is no whole number for <code>limit</code>; or a required parameter left out or given as
 null. The message names each such parameter of the call and what it takes: <code>Valid values:
-...</code> with the listed names, or <code>Expected an integer.</code>, <code>Expected a
-string.</code>, <code>Expected true or false.</code> or <code>Expected a list of: ...</code>. A
+...</code> with the listed names, or <code>Expected an integer.</code>, <code>Expected an integer
+of at most 2147483647.</code> or <code>Expected an integer of at least -2147483648.</code> for a
+whole number beyond that range, <code>Expected a string.</code>, <code>Expected true or
+false.</code>, <code>Expected a list of strings.</code> or <code>Expected a list of: ...</code>. A
 value with exactly one reading is taken without an error, see
 <a href="#tools-values">Tool reference</a>.</p>
 
 <h4><code>This assembly is a reference assembly, which holds a library's declarations without their code, so ...</code></h4>
 <p>A question that reads code was asked of a reference assembly, whose method bodies are
-placeholders. Ask the build the library runs as; the message also names the questions that read
-declarations alone and answer on this assembly. See
+placeholders. Ask the build the library runs as, or for <code>find_harmony_dependencies</code> the
+build the mod runs as; the messages of <code>analyze</code>, <code>decompile</code> and
+<code>search_code</code> also name the questions that read declarations alone and answer on this
+assembly. See
 <a href="#conv-reference-assemblies">Reference assemblies</a>.</p>
 
 <h4><code>Type not found: ...</code></h4>
@@ -2652,9 +2775,10 @@ case-sensitively.</p>
 <h4><code>Member '...' not found on ..., its base types, or as an extension method.</code></h4>
 <p>The name is not on the type, its base classes or among the extension methods that apply.
 <code>list_members</code> lists what the type has; an accessor is named with its prefix,
-<code>get_Count</code>, and a constructor <code>.ctor</code> or by the type's name. A lookup of a
-property or an event alone reads <code>Property '...' not found on ... or its base types.</code>
-and likewise for an event. Where a usual name does not apply, the message ends with what does:
+<code>get_Count</code>, and a constructor <code>.ctor</code> or by the type's name. With an
+overload hint, and for <code>analyze</code>'s <code>call_sites</code>, which looks for a method,
+the message begins <code>Method '...'</code>. Where a usual name does not apply, the message
+ends with what does:
 <code>; its indexer is named Chars: System.String.get_Chars(int)</code> for
 <code>get_Item</code>, <code>set_Item</code> or <code>Item</code> on a type whose indexer has
 another name (asked of the .NET runtime's <code>System.Private.CoreLib.dll</code>); <code>; a
@@ -2662,7 +2786,10 @@ struct that declares no constructor has none in the assembly, and instantiated_b
 is created</code>, <code>; an enum has no constructor</code> or <code>; its static constructor is
 named '.cctor'</code> for <code>.ctor</code> or the type's name; and <code>; the methods named Run
 are CallShapes.Namesakes.Store.Run(), CallShapes.Namesakes.Store.Run&lt;T&gt;()</code> for
-brackets whose count of type parameters fits no method of the name. When the search stopped at a
+brackets whose count of type parameters fits no method of the name. For the name of a property of
+a C# 14 extension block, which the class holds only as the methods the compiler made of its
+accessors, the message ends with those methods, the ones to ask instead: <code>; Doubled is a
+property of an extension block: ...get_Doubled(Gauge)</code>. When the search stopped at a
 base class ILens could not read, the message says <code>the base types ILens could load</code>
 and ends with the class and the reason, as in <code>ExternalUser.dll</code> without the folder of
 <code>ExternalLib.dll</code> among the allow-roots:</p>
@@ -2855,7 +2982,7 @@ instructions.</p>
 
 <h2 id="colophon">Version, source, license</h2>
 
-<p>This guide documents <strong>ILens 11</strong>. Source and issue tracker:
+<p>This guide documents <strong>ILens 12</strong>. Source and issue tracker:
 <a href="https://github.com/tadis174/ILens">github.com/tadis174/ILens</a>.</p>
 
 <p>ILens is released under the MIT License; the full text ships as <code>LICENSE</code> beside

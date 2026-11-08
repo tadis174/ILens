@@ -301,7 +301,7 @@ public sealed class UnreadLibraryTests : IClassFixture<UnreadLibraryTests.OtherV
     }
 
     private static async Task<McpClient> StartServer(string name, string root) =>
-        await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+        await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
         {
             Name = name,
             Command = ILensServerFixture.ResolveILensExecutable(),

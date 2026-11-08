@@ -48,6 +48,7 @@
     <Compile Include="..\BaseShift\Arity.cs" Link="Arity.cs" />
     <Compile Include="..\BaseShift\Keywords.cs" Link="Keywords.cs" />
     <Compile Include="..\BaseShift\Bodies.cs" Link="Bodies.cs" />
+    <Compile Include="..\BaseShift\Foreign.cs" Link="Foreign.cs" />
   </ItemGroup>
 
 </Project>

@@ -75,14 +75,11 @@ public static class BodyDiff
     }
 
     /// <summary>
-    /// A body's lines, without the carriage returns the decompiler and the disassembler end them
-    /// with and without the empty line after the last one.
+    /// A body's lines, without the empty line after the last one.
     /// </summary>
     private static string[] Lines(string text)
     {
         var lines = text.Split('\n');
-        for (var i = 0; i < lines.Length; i++)
-            lines[i] = lines[i].TrimEnd('\r');
         return lines.Length > 1 && lines[^1].Length == 0 ? lines[..^1] : lines;
     }
 

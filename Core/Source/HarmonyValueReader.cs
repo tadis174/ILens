@@ -319,7 +319,7 @@ internal sealed class HarmonyValueReader
         var parameters = new HashSet<int>();
         var fields = new HashSet<string>(StringComparer.Ordinal);
         var seen = new HashSet<ILVariable>();
-        var pending = new Stack<AstNode>(expressions.Where(expression => expression is not null && !expression.IsNull));
+        var pending = new Stack<AstNode>(expressions.Where(expression => expression is not null));
         while (pending.Count > 0)
         {
             foreach (var node in pending.Pop().DescendantsAndSelf)
@@ -482,7 +482,7 @@ internal sealed class HarmonyValueReader
     /// <summary>The values <paramref name="expression"/> may have in <paramref name="frame"/>; none for no expression.</summary>
     public IReadOnlyList<Value> Read(Expression expression, Frame frame)
     {
-        if (expression is null || expression.IsNull)
+        if (expression is null)
             return [];
         if (!_reading.Add((expression, frame)))
             return UnknownOnly;
@@ -546,7 +546,7 @@ internal sealed class HarmonyValueReader
         tree.Descendants
             .Select(node => node switch
             {
-                ReturnStatement { Expression.IsNull: false } returned when !InNestedFunction(returned) => (returned.Expression, false),
+                ReturnStatement { Expression: not null } returned when !InNestedFunction(returned) => (returned.Expression, false),
                 YieldReturnStatement yielded when !InNestedFunction(yielded) => (yielded.Expression, true),
                 _ => (null, false),
             })
@@ -801,7 +801,7 @@ internal sealed class HarmonyValueReader
     private static AstNode UnconditionalDefinition(Statement statement, Defined defined) => statement switch
     {
         VariableDeclarationStatement declaration =>
-            declaration.Variables.FirstOrDefault(initializer => defined.Declares(initializer) && !initializer.Initializer.IsNull),
+            declaration.Variables.FirstOrDefault(initializer => defined.Declares(initializer) && initializer.Initializer is not null),
         ExpressionStatement { Expression: AssignmentExpression assignment } when defined.Names(assignment.Left) => assignment,
         _ => null,
     };
@@ -810,7 +810,7 @@ internal sealed class HarmonyValueReader
     private static IEnumerable<AstNode> DefinitionsIn(Statement statement, Defined defined) =>
         statement.DescendantsAndSelf.Where(node => node switch
         {
-            VariableInitializer initializer => defined.Declares(initializer) && !initializer.Initializer.IsNull,
+            VariableInitializer initializer => defined.Declares(initializer) && initializer.Initializer is not null,
             AssignmentExpression assignment => defined.Names(assignment.Left),
             DirectionExpression { FieldDirection: FieldDirection.Out or FieldDirection.Ref } direction => defined.Names(direction.Expression),
             OutVarDeclarationExpression declaration => defined.Declares(declaration.Variable),
@@ -825,7 +825,7 @@ internal sealed class HarmonyValueReader
         {
             switch (node)
             {
-                case VariableInitializer initializer when defined.Declares(initializer) && !initializer.Initializer.IsNull:
+                case VariableInitializer initializer when defined.Declares(initializer) && initializer.Initializer is not null:
                     yield return initializer.Initializer;
                     break;
                 case AssignmentExpression assignment when defined.Names(assignment.Left):
@@ -1986,7 +1986,7 @@ internal sealed class HarmonyValueReader
         }
         if (type?.Kind == TypeKind.Delegate && arguments.Count == 1)
             return [MethodGroup(arguments[0])];
-        if (!creation.Initializer.IsNull)
+        if (creation.Initializer is not null)
         {
             var elements = creation.Initializer.Elements.ToList();
             if (elements.Count == 0 || elements.Any(element => element is NamedExpression or ArrayInitializerExpression))
@@ -2012,7 +2012,7 @@ internal sealed class HarmonyValueReader
 
     private Value ReadArray(ArrayCreateExpression array, Frame frame)
     {
-        if (!array.Initializer.IsNull)
+        if (array.Initializer is not null)
             return new ListValue(array.Initializer.Elements.SelectMany(element => Read(element, frame)).ToList());
         return array.Arguments.Count == 1 && Unparenthesized(array.Arguments.Single()) is PrimitiveExpression { Value: 0 }
             ? EmptyList

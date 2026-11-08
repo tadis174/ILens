@@ -8,13 +8,13 @@ The default fallback for an AI agent inspecting a compiled .NET assembly is to s
 
 | Task | `ilspycmd` cost | ILens tool | ILens cost |
 |------|----------------:|------------|-----------:|
-| List the public types in a namespace | 1,041,476 tokens | `find_types` | 1,109 tokens |
-| See the API surface of one mid-sized class | 1,041,476 tokens | `list_members` | 562 tokens |
-| Find which types expose a given method | 1,041,476 tokens | `find_methods` | 526 tokens |
+| List the public types in a namespace | 1,240,053 tokens | `find_types` | 987 tokens |
+| See the API surface of one mid-sized class | 1,240,053 tokens | `list_members` | 692 tokens |
+| Find which types expose a given method | 1,240,053 tokens | `find_methods` | 668 tokens |
 
-*Measured against `ICSharpCode.Decompiler.dll` 9.1.0.7988 on 2026-10-31; token figures are character counts divided by 4, not a real tokenizer.*
+*Measured against `ICSharpCode.Decompiler.dll` 11.2.0.10050 on 2026-11-08; token figures are character counts divided by 4, not a real tokenizer.*
 
-ILens turns assembly inspection into bounded, targeted lookups: list types in a namespace, list one type's members without bodies, find methods by name, decompile a single method body, run cross-reference analysis (callers, overrides, implementations, extension methods, attribute usage). Each call returns a focused response — making it cheap enough to leave registered as an always-available tool.
+ILens turns assembly inspection into bounded, targeted lookups: list types in a namespace, list one type's members without bodies, find methods by name, decompile a single method body, search the decompiled code for a pattern, run cross-reference analysis (callers, overrides, implementations, extension methods, attribute usage), compare two builds, list what a Harmony mod patches. Each call returns a focused response — making it cheap enough to leave registered as an always-available tool.
 
 ## Scope
 
@@ -107,7 +107,7 @@ dotnet build -c Release
 dotnet publish -c Release
 ```
 
-The publish target produces `Build/dist/ILens.exe` along with `LICENSE`, `README.md`, `guide.html`, and `third-party-licenses/`. The working tree must be clean before publishing, and `Build/doc/guide.html` must exist (run the project's `/doc` skill to regenerate it).
+The publish target produces `Build/dist/ILens.exe` along with `LICENSE`, `README.md`, `guide.html`, and `third-party-licenses/`. The working tree must be clean before publishing, and `Build/doc/guide.html` must exist (restore it from git if it is missing).
 
 ## License
 

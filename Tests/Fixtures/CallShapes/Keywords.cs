@@ -25,7 +25,9 @@ namespace CallShapes.Keywords
 
         public int @fixed { get; set; }
 
+#pragma warning disable CS0067 // Declared for its name alone; nothing raises it.
         public event EventHandler @lock;
+#pragma warning restore CS0067
 
         public void @checked()
         {

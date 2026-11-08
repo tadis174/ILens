@@ -674,10 +674,10 @@ public sealed class HarmonyTests : IClassFixture<ILensServerFixture>, IClassFixt
     [Fact]
     public async Task FindHarmonyDependencies_WithHarmonyLibLoaded_ListsTheSameDependencies()
     {
-        // With HarmonyLib among the references it can load, ILSpy writes Harmony's extension
-        // spelling, typeof(X).Method("Y"), as an extension call rather than a static
-        // AccessToolsExtensions call, drops arguments left at their defaults, and resolves the
-        // overload a method group picks.
+        // With HarmonyLib among the references it can load, ILSpy drops arguments left at their
+        // defaults and resolves the overload a method group picks. Harmony's extension spelling,
+        // typeof(X).Method("Y"), stays a static AccessToolsExtensions call either way, since the
+        // scanner reads trees in which ILSpy writes no extension call.
         string text = await CallToolText("find_harmony_dependencies", new()
         {
             ["assembly"] = _harmonyModPath,
@@ -721,7 +721,7 @@ public sealed class HarmonyTests : IClassFixture<ILensServerFixture>, IClassFixt
         {
             File.Copy(_harmonyModPath, Path.Combine(root, "HarmonyMod.dll"));
             EmptyCoreAssembly.Write(root);
-            await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            await using var client = await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = "ILens-constructions",
                 Command = ILensServerFixture.ResolveILensExecutable(),

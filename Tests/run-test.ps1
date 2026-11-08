@@ -1,5 +1,4 @@
-# ILens end-to-end test runner. Committed and Claude-skill-independent — invoke
-# it by hand, from CI, or from the /publish gate; it does not depend on Claude.
+# ILens end-to-end test runner.
 #
 # Spawns the real ILens MCP server and exercises its tools over the MCP protocol
 # (the tests are the *Tests.cs classes in Tests/).
@@ -8,8 +7,8 @@
 #   (no args)          Inner loop — builds Core (Release) and tests that build
 #                      output under Build/bin/Core/Release/.
 #   -ILensExe <path>   Tests exactly that executable, with no build of its own.
-#                      The /publish gate passes the staged single-file
-#                      Build/dist/ILens.exe here.
+#                      The release flow of dotnet publish passes the
+#                      single-file Build/dist/ILens.exe it has just built here.
 #
 # Exit codes: 0 = tests passed, 1 = a test failed, 2 = setup/build problem.
 

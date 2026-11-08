@@ -244,7 +244,7 @@ public sealed class LinkedRootTests
     }
 
     private static Task<McpClient> StartServer(params string[] roots) =>
-        McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+        ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
         {
             Name = "ILens-linked",
             Command = ILensServerFixture.ResolveILensExecutable(),

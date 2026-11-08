@@ -326,12 +326,14 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     {
         // An accessor decompiled on its own must still say which accessor it is: without the
         // keyword, a getter printed its attributes and body alone, and a readonly getter a
-        // lone "readonly" line before the body.
+        // lone "readonly" line before the body. An auto-property's accessor reads as its
+        // property writes it, such as "init;".
         var accessor = CoreLibAccessor(declaration);
         string text = await DecompileCoreLibMethod(accessor.DeclaringType!, accessor.Name,
             new() { ["parameter_count"] = accessor.GetParameters().Length });
 
-        Assert.Matches($@"(?m)^{declaration}\s*$", text);
+        string semicolon = declaration is "add" or "remove" ? "" : ";?";
+        Assert.Matches($@"(?m)^{declaration}{semicolon}\s*$", text);
     }
 
     // Members whose C# declaration carries a keyword that the metadata records as a reference
@@ -623,8 +625,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         // The shared fixture's server uses the default 200 MB budget, which fits
         // the multi-MB test target comfortably. Spawn a transient second server
         // with --max-total-size 1 (1 MB) so the same assembly now exceeds the
-        // whole budget on its own — exercising the precondition documented in
-        // CLAUDE.md's "Sharp edges" section.
+        // whole budget on its own, and the server rejects it rather than loading it.
         string allowRoot = Path.GetDirectoryName(_server.AssemblyPath)!;
         var transport = new StdioClientTransport(new StdioClientTransportOptions
         {
@@ -632,7 +633,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             Command = ILensServerFixture.ResolveILensExecutable(),
             Arguments = ["--allow-root", allowRoot, "--max-total-size", "1"],
         });
-        await using var tightClient = await McpClient.CreateAsync(transport);
+        await using var tightClient = await ILensServerFixture.ConnectAsync(transport);
 
         CallToolResult result = await tightClient.CallToolAsync("find_types",
             new Dictionary<string, object?>
@@ -695,7 +696,7 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
         }
 
         static async Task<McpClient> StartServer(string name, string root, params string[] options) =>
-            await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = name,
                 Command = ILensServerFixture.ResolveILensExecutable(),
@@ -1330,6 +1331,24 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
 
         Assert.True(result.IsError, $"Expected an error, got: {text}");
         Assert.Contains(expected, text);
+    }
+
+    [Fact]
+    public async Task Analyze_CallSites_WithCompilerGenerated_ReturnsError()
+    {
+        // call_sites reports a call in generated code under the member written in source, so the
+        // switch has nothing to add there.
+        var (result, text) = await CallToolExpectingError("analyze", new()
+        {
+            ["assembly"] = _server.AssemblyPath,
+            ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+            ["member_name"] = "get_ThrowOnAssemblyResolveErrors",
+            ["kind"] = "call_sites",
+            ["include_compiler_generated"] = true,
+        });
+
+        Assert.True(result.IsError, $"Expected an error, got: {text}");
+        Assert.Contains("include_compiler_generated does not apply to kind 'call_sites'.", text);
     }
 
     [Theory]
@@ -2365,7 +2384,8 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             var named = baseTypes.Prepend(type).SelectMany(OrdinaryMembers).ToLookup(m => m.Name);
             var own = OrdinaryMembers(type).Where(m => named[m.Name].Count() == 1).ToArray();
             var overrides = OrdinaryMembers(type).OfType<MethodInfo>()
-                .Where(m => named[m.Name].Count() == 2 && baseTypes.Contains(BaseDeclaration(m).DeclaringType))
+                .Where(m => named[m.Name].Count() == 2
+                    && BaseDeclaration(m).DeclaringType is { } declaring && baseTypes.Contains(declaring))
                 .ToArray();
             var inherited = baseTypes.SelectMany(OrdinaryMembers).Where(m => named[m.Name].Count() == 1).ToArray();
 

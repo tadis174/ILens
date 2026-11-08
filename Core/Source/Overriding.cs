@@ -29,6 +29,8 @@ namespace ILens;
 /// override of it, whatever that one returns. A member declared anew, <c>new virtual</c>, has
 /// such a base member as well and overrides nothing, so whether a member overrides is asked
 /// before which.</para>
+/// <para>Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: <c>IsOverride</c> and
+/// <c>IsSealed</c> of a method read its flags alone. The cases: ReturnOverrideTests.</para>
 /// </remarks>
 public static class Overriding
 {
@@ -45,6 +47,9 @@ public static class Overriding
     /// builds its class anew at every question in a type system that keeps no objects, as
     /// ILens's own is. There the first base member of an event is the event itself, on which
     /// a walk up the overrides does not end.
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: <c>GetBaseMembers</c> and
+    /// <c>MetadataEvent.DeclaringTypeDefinition</c> read as described. The case:
+    /// AMethodAPropertyAnEventAndAnAccessor_AreAnsweredAlike in OverrideTests.
     /// </remarks>
     public static IMember Overridden(IMember member)
     {

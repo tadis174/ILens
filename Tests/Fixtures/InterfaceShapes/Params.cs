@@ -23,8 +23,9 @@ namespace InterfaceShapes.Params
     }
 
     // Calls to them with arguments one by one, with none and with a whole collection. The
-    // compiler builds the collection, and the decompiler, which knows no C# 13, passes it as one
-    // argument, while a params array's call stays in its expanded form.
+    // compiler builds the collection, and the decompiler call_sites reads, which has params
+    // collections off, passes it as one argument, while a params array's call stays in its
+    // expanded form.
     public class Caller
     {
         public int Expanded(Gatherer gatherer, int first, string part) =>

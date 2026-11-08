@@ -1,4 +1,4 @@
-# Attribution gate. Runs as part of /publish pre-flight (Step 1).
+# Attribution gate. Runs before each release, ahead of dotnet publish.
 #
 # Verifies that vendored third-party attribution under third-party-licenses/
 # matches the build's actual dependencies and supporting files. Format
@@ -10,7 +10,7 @@
 #   2. No stale entries        — every explicit INDEX entry is still in the build
 #   3. LICENSE files present   — every source's vendored file exists on disk
 #   4. Apache NOTICE accountability  — Apache sources have NOTICE or documented N/A
-#   5. Runtime version match   — vendored runtime notices match the bundled .NET version
+#   5. Runtime version match   — vendored runtime notices match the highest installed .NET runtime of their major version
 #   6. Upstream drift          — vendored files match their upstream URLs (network)
 #   7. NuGet metadata          — every package's nuspec projectUrl maps to an INDEX source
 #

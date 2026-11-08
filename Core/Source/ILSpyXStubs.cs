@@ -1,6 +1,7 @@
 using System.Reflection.Metadata;
 using System.Xml.Linq;
 using ICSharpCode.Decompiler.Metadata;
+using ICSharpCode.Decompiler.Output;
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.ILSpyX.Abstractions;
 using ICSharpCode.ILSpyX.Settings;
@@ -53,9 +54,10 @@ internal sealed class StubLanguage : ILanguage
     /// scan. With the empty map they report a use inside generated code under the generated
     /// method, and <see cref="AssemblyHost.AttributeToSource"/> attributes it to source for
     /// every incoming kind alike. Giving them a real map changes no answer and costs time:
-    /// "Instantiated By" asks for it for every type in scope, and ILSpyX's "Read By", which
-    /// asks the same way, took 2.3 s on a game's main assembly with ILSpy's map against 0.9 s
-    /// without (measured 2026-09-27).
+    /// "Instantiated By" asks for it for every type in scope. The cost was measured on ILSpyX's
+    /// "Read By", which asks the same way and which ILens does not run, since
+    /// <see cref="FieldAccessScanner"/> answers that question: 2.3 s on a game's main assembly
+    /// with ILSpy's map against 0.9 s without (measured 2026-09-27).
     /// </remarks>
     public CodeMappingInfo GetCodeMappingInfo(MetadataFile module, EntityHandle member)
         => new(module, member.Kind == HandleKind.TypeDefinition ? (TypeDefinitionHandle)member : default);
@@ -66,22 +68,8 @@ internal sealed class StubLanguage : ILanguage
 
     public string GetTooltip(IEntity entity) => entity.FullName;
 
-    public string TypeToString(IType type, bool includeNamespace)
-        => includeNamespace ? type.FullName : type.Name;
+    public string TypeToString(IType type, ConversionFlags conversionFlags)
+        => conversionFlags.HasFlag(ConversionFlags.UseFullyQualifiedTypeNames) ? type.FullName : type.Name;
 
-    public string MethodToString(IMethod method, bool includeDeclaringTypeName,
-        bool includeNamespace, bool includeNamespaceOfDeclaringTypeName)
-        => method.FullName;
-
-    public string FieldToString(IField field, bool includeDeclaringTypeName,
-        bool includeNamespace, bool includeNamespaceOfDeclaringTypeName)
-        => field.FullName;
-
-    public string PropertyToString(IProperty property, bool includeDeclaringTypeName,
-        bool includeNamespace, bool includeNamespaceOfDeclaringTypeName)
-        => property.FullName;
-
-    public string EventToString(IEvent @event, bool includeDeclaringTypeName,
-        bool includeNamespace, bool includeNamespaceOfDeclaringTypeName)
-        => @event.FullName;
+    public string EntityToString(IEntity entity, ConversionFlags conversionFlags) => entity.FullName;
 }

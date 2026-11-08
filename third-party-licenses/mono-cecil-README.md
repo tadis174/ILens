@@ -1,7 +1,7 @@
 # Mono.Cecil MIT license
 
-`mono-cecil-LICENSE` covers `Mono.Cecil`, the IL reading library that backs
-`ICSharpCode.Decompiler`.
+`mono-cecil-LICENSE` covers `Mono.Cecil`, an IL reading library that
+`ICSharpCode.ILSpyX` depends on.
 
 ## Provenance
 

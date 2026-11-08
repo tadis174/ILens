@@ -308,7 +308,7 @@ public sealed class DefaultValueTests
         File.Copy(Path.Combine(_directory, "References", "ExternalLib.dll"), Path.Combine(with, "ExternalLib.dll"));
         try
         {
-            await using (var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            await using (var client = await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = "ILens-defaults",
                 Command = ILensServerFixture.ResolveILensExecutable(),

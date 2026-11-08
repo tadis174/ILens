@@ -43,8 +43,9 @@ public static class CompilerGeneratedFilter
 
     /// <summary>
     /// Is this member compiler-generated? It is when its name starts with '<', as a backing
-    /// field's or a local function's does, when it is the method Burst adds to start one of its
-    /// wrappers, <c>Initialize$X_HHHHHHHH$BurstDirectCall</c>, or when its declaring type is
+    /// field's or a local function's does, when its name contains <c>$BurstDirectCall</c>, as
+    /// that of the method Burst adds to start one of its wrappers,
+    /// <c>Initialize$X_HHHHHHHH$BurstDirectCall</c>, does, or when its declaring type is
     /// generated. A field also is when it carries <c>[CompilerGenerated]</c>, when it holds the
     /// subscribers of an event of its class (<see cref="EventOf"/>), and when it is the field an
     /// enum keeps its value in (<see cref="IsEnumValueField"/>). The attribute alone does not

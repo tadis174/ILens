@@ -1,3 +1,4 @@
+using System.Reflection.Metadata;
 using System.Text;
 using ICSharpCode.Decompiler.TypeSystem;
 
@@ -879,11 +880,12 @@ public sealed class AssemblyComparer
     /// declaration writes before its name, as list_members' heading writes them
     /// (<see cref="SignatureFormatter.FormatTypeKeywords"/>), which are its accessibility, static,
     /// abstract or sealed, readonly, ref, record and its kind; its base type, an enum's underlying
-    /// type, its direct interfaces, and its own type parameters. The base type, the interfaces and
-    /// the types a condition names are recorded by <c>ReflectionName</c>, not <c>FullName</c>,
-    /// which drops the generic arity and type arguments, so a base that moves from <c>Task</c> to
-    /// <c>Task&lt;int&gt;</c>, or from <c>List&lt;int&gt;</c> to <c>List&lt;string&gt;</c>,
-    /// counts as a change. Each type parameter is an entry of its own, by position, as
+    /// type, its direct interfaces, whichever assembly defines them, and its own type parameters.
+    /// The base type, the interfaces and the types a condition names are recorded by
+    /// <c>ReflectionName</c>, not <c>FullName</c>, which drops the generic arity and type
+    /// arguments, so a base that moves from <c>Task</c> to <c>Task&lt;int&gt;</c>, or from
+    /// <c>List&lt;int&gt;</c> to <c>List&lt;string&gt;</c>, counts as a change. Each type
+    /// parameter is an entry of its own, by position, as
     /// <c>ReflectionName</c> names a type parameter, so that a type parameter renamed alone does
     /// not count: its in or out, and its conditions, sorted, as the interfaces are, so that a
     /// where clause reordered in source does not count either. A type whose name does not count
@@ -894,19 +896,42 @@ public sealed class AssemblyComparer
     /// </summary>
     private static string TypeMetadataSignature(ITypeDefinition type)
     {
-        var baseType = type.DirectBaseTypes
-            .FirstOrDefault(t => t.GetDefinition()?.Kind == TypeKind.Class)?.ReflectionName ?? "";
+        // The base type and the interfaces are read from the type's own metadata, not told apart
+        // by the kind of a loaded definition: ILens's type system loads no reference, so one that
+        // another assembly defines has no definition, and only the metadata says which it is.
+        // They are resolved with their attributes, as ILSpy's DirectBaseTypes resolves them.
+        var module = (MetadataModule)type.ParentModule;
+        var metadata = module.MetadataFile.Metadata;
+        var handle = (TypeDefinitionHandle)type.MetadataToken;
+        var definition = metadata.GetTypeDefinition(handle);
+        var context = new GenericContext(type.TypeParameters);
+        var baseType = definition.BaseType.IsNil ? "" : BaseTypeName();
         var underlying = type.Kind == TypeKind.Enum ? type.EnumUnderlyingType?.ReflectionName ?? "" : "";
         var interfaces = string.Join(",",
-            type.DirectBaseTypes
-                .Where(t => t.GetDefinition()?.Kind == TypeKind.Interface)
-                .Select(t => t.ReflectionName)
+            definition.GetInterfaceImplementations()
+                .Select(metadata.GetInterfaceImplementation)
+                .Select(implementation => module.ResolveType(
+                    implementation.Interface, context, implementation.GetCustomAttributes()).ReflectionName)
                 .OrderBy(s => s, StringComparer.Ordinal));
         var parameters = string.Join(";", TypeWalker.OwnTypeParameters(type)
             .Select(parameter => $"{parameter.Variance}:" + string.Join(",",
                 ReferenceFormatter.FormatConditions(parameter, t => t.ReflectionName).Order(StringComparer.Ordinal))));
         return $"words={SignatureFormatter.FormatTypeKeywords(type)};base={baseType};underlying={underlying};" +
             $"ifaces={interfaces};parameters={parameters}";
+
+        // A base type whose signature cannot be decoded is unknown, as ILSpy's DirectBaseTypes
+        // reads it, so that one damaged type does not end the whole comparison.
+        string BaseTypeName()
+        {
+            try
+            {
+                return module.ResolveType(definition.BaseType, context, metadata.GetCustomAttributes(handle)).ReflectionName;
+            }
+            catch (BadImageFormatException)
+            {
+                return SpecialType.UnknownType.ReflectionName;
+            }
+        }
     }
 
     /// <summary>

@@ -91,7 +91,7 @@ public sealed class ReferenceResolutionTests
                 Command = ILensServerFixture.ResolveILensExecutable(),
                 Arguments = ["--allow-root", users, "--allow-root", links],
             });
-            await using (var client = await McpClient.CreateAsync(transport))
+            await using (var client = await ILensServerFixture.ConnectAsync(transport))
             {
                 string lookups = await Decompile(client, Path.Combine(users, "HarmonyMod.dll"),
                     "HarmonyMod.OtherLookupsPatch", "TargetMethods");
@@ -139,7 +139,7 @@ public sealed class ReferenceResolutionTests
                 Command = ILensServerFixture.ResolveILensExecutable(),
                 Arguments = ["--allow-root", users, "--allow-root", locked],
             });
-            await using (var client = await McpClient.CreateAsync(transport))
+            await using (var client = await ILensServerFixture.ConnectAsync(transport))
             {
                 string lookups = await Decompile(client, Path.Combine(users, "HarmonyMod.dll"),
                     "HarmonyMod.OtherLookupsPatch", "TargetMethods");

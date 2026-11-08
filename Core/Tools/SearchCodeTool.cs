@@ -48,8 +48,7 @@ public static class SearchCodeTool
         var host = lease.Host;
         // A reference assembly's bodies are placeholders, which would read as its code.
         if (host.IsReferenceAssembly)
-            throw AssemblyHost.ReferenceAssemblyError("there is no code to search",
-                "ask the build the library runs as. find_methods and list_members read declarations alone and answer here.");
+            throw AssemblyHost.ReferenceAssemblyError("there is no code to search", AssemblyHost.AskForCodeElsewhere);
         var scope = byType ? Scope.OfType(host.Resolver.ResolveType(type_name), include_compiler_generated)
             : Scope.OfTypes(host, @namespace, include_compiler_generated);
 
@@ -95,6 +94,7 @@ public static class SearchCodeTool
         foreach (var packed in texts)
         {
             var text = CodeTextPass.Read(packed);
+            scope.RequireLinesOfItsOwn(text);
             foreach (var range in text.Ranges.Where(scope.Covers))
             {
                 for (int number = range.First; number <= range.Last; number++)
@@ -166,11 +166,12 @@ public static class SearchCodeTool
 
     /// <summary>
     /// What a search covers: the top-level types whose text it needs, and of their lines those
-    /// <see cref="Covers"/> admits. <see cref="Label"/> is the scope as the header names it.
+    /// <see cref="Covers"/> admits. <see cref="Label"/> is the scope as the header names it, and
+    /// <see cref="Named"/> the type <c>type_name</c> names, or null for a namespace or the assembly.
     /// </summary>
     private sealed record Scope(
         IReadOnlyList<TypeDefinitionHandle> TopLevelTypes, HashSet<TypeDefinitionHandle> Within, bool IncludeGenerated,
-        string Label)
+        string Label, ITypeDefinition Named = null)
     {
         /// <summary>
         /// One type with the types nested in it. A type is decompiled with its outermost type,
@@ -193,7 +194,7 @@ public static class SearchCodeTool
             Add(type);
             return new Scope([(TypeDefinitionHandle)outermost.MetadataToken], within,
                 includeGenerated || CompilerGeneratedFilter.IsCompilerGenerated(type),
-                $" in {ReferenceFormatter.FormatTypeName(type)}");
+                $" in {ReferenceFormatter.FormatTypeName(type)}", type);
         }
 
         /// <summary>
@@ -215,5 +216,38 @@ public static class SearchCodeTool
 
         public bool Covers(CodeTextPass.LineRange range) =>
             (IncludeGenerated || !range.Generated) && (Within is null || Within.Contains(range.Type));
+
+        /// <summary>
+        /// The error for a nested type the decompiler writes inside the type around it, such as a
+        /// lambda's class, an iterator's or async method's state machine, or a C# 14 extension
+        /// block's grouping class: no line of <paramref name="text"/> belongs to it or to a type
+        /// nested in it, so its search would answer that nothing matches although its contents are
+        /// there. The error names the nearest type around it that owns a line, whose search finds
+        /// them. A top-level type that decompiled owns the lines of its declaration, which the pass
+        /// writes for every one (<see cref="AssemblyHost.DecompileTopLevelType"/>), so the walk
+        /// ends at it at the latest.
+        /// </summary>
+        /// <remarks>
+        /// The error comes only where no type of the scope owns a line of the text, so where the
+        /// search could find nothing. Only a type that decompiled has a text to read here, so where
+        /// the outermost type failed, the answer still says that it was not searched. The cases, in
+        /// SearchCodeTests: ATypeWrittenInsideAnother_IsAnErrorNamingTheTypeAroundIt and
+        /// AnExtensionBlocksGeneratedTypes_AreAnErrorNamingTheirClass.
+        /// </remarks>
+        public void RequireLinesOfItsOwn(CodeTextPass.TypeText text)
+        {
+            if (Named?.DeclaringTypeDefinition is null)
+                return;
+            var owners = text.Ranges.Select(range => range.Type).ToHashSet();
+            if (owners.Overlaps(Within))
+                return;
+            for (var around = Named.DeclaringTypeDefinition; around is not null; around = around.DeclaringTypeDefinition)
+            {
+                if (owners.Contains((TypeDefinitionHandle)around.MetadataToken))
+                    throw new ArgumentException(
+                        $"{ReferenceFormatter.FormatTypeName(Named)} has no declaration of its own in the decompiled " +
+                        $"code of {ReferenceFormatter.FormatTypeName(around)}, where a search finds its contents.");
+            }
+        }
     }
 }

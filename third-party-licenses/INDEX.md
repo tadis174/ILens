@@ -17,7 +17,7 @@ whose attributions are in `dotnet-runtime-THIRD-PARTY-NOTICES.txt`.
 - License: `dotnet-runtime-THIRD-PARTY-NOTICES.txt` (various — see file)
 - Source: https://github.com/dotnet/runtime
 - Notes: covers non-Microsoft components bundled into the .NET 10 runtime
-  (ICU, LZMA SDK, zlib, etc.). Required because `<SelfContained>true</SelfContained>`
+  (zlib-ng, Brotli, Unicode data, etc.). Required because `<SelfContained>true</SelfContained>`
   ships the runtime inside the binary.
 - Packages: (none — this file attributes runtime components, not NuGet packages)
 
@@ -31,7 +31,7 @@ whose attributions are in `dotnet-runtime-THIRD-PARTY-NOTICES.txt`.
 ## Model Context Protocol C# SDK
 - License: `model-context-protocol-LICENSE` (Apache-2.0 / MIT — transition document; covers both)
 - Source: https://github.com/modelcontextprotocol/csharp-sdk, https://csharp.sdk.modelcontextprotocol.io/
-- Notes: see `model-context-protocol/README.md` for the Apache §4(d) NOTICE accountability check. The packages declare the docs site (`csharp.sdk.modelcontextprotocol.io`) as their NuGet `projectUrl`; the GitHub repo is the source of the LICENSE.
+- Notes: see `model-context-protocol-README.md` for the Apache §4(d) NOTICE accountability check. The packages declare the docs site (`csharp.sdk.modelcontextprotocol.io`) as their NuGet `projectUrl`; the GitHub repo is the source of the LICENSE.
 - Packages:
   - ModelContextProtocol
   - ModelContextProtocol.Core

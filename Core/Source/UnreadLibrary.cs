@@ -22,6 +22,14 @@ namespace ILens;
 /// system follows it, so the answer names the library the class is missing in and not one that
 /// only passes the name on.
 /// </para>
+/// <para>
+/// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050:
+/// <c>TypeProvider.GetTypeFromReference</c> looks for the class in the library the reference
+/// resolves to, and in every loaded module where it resolves to none;
+/// <c>DefaultAssemblyReference.Resolve</c>, <c>MetadataModule.GetTypeDefinition</c> and
+/// <c>MetadataModule.ResolveForwardedType</c> find a library and follow a forward as described.
+/// The cases: UnreadLibraryTests, which pin the answers and not the rules behind them.
+/// </para>
 /// </remarks>
 /// <param name="Name">The library, as the reference to it names it.</param>
 /// <param name="Version">The version that reference asks for.</param>

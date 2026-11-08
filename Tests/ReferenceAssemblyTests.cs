@@ -6,11 +6,11 @@ namespace Tests;
 /// <summary>
 /// End-to-end tests for questions that read code, asked of a reference assembly. Such an assembly
 /// carries ReferenceAssemblyAttribute and holds a library's declarations without their code, so
-/// analyze's kinds that read code, search_code and find_harmony_dependencies refuse it rather than
-/// answer from its placeholders that nothing uses, calls or creates a member. The kinds that read
-/// declarations alone answer as for any assembly. The build of Plates that
-/// <see cref="CodelessAssembly"/> writes with the mark has bodies that hold code, so the mark alone
-/// decides, and the build without it is the control.
+/// analyze's kinds that read code, search_code, find_harmony_dependencies and decompile refuse it
+/// rather than answer from its placeholders, which would say that nothing uses, calls or creates a
+/// member, or read as a member's code. The kinds that read declarations alone answer as for any
+/// assembly. The build of Plates that <see cref="CodelessAssembly"/> writes with the mark has bodies
+/// that hold code, so the mark alone decides, and the build without it is the control.
 /// </summary>
 public sealed class ReferenceAssemblyTests : IClassFixture<ILensServerFixture>
 {
@@ -126,9 +126,37 @@ public sealed class ReferenceAssemblyTests : IClassFixture<ILensServerFixture>
         }
     }
 
-    // Without the mark, the same code answers: Stack's constructor sets Size.
+    // A whole type, a member, a type of another assembly, an array type and a name the assembly
+    // does not have are refused alike, since no name of a reference assembly has code to show. The
+    // second build has the property Top.
+    [Theory]
+    [InlineData(Stack, null, false)]
+    [InlineData(Stack, "Count", false)]
+    [InlineData(Stack, "Size", false)]
+    [InlineData(Stack, "Top", true)]
+    [InlineData(Stack, "get_Top", true)]
+    [InlineData("System.Object", null, false)]
+    [InlineData("Plates.Stack[]", "Count", false)]
+    [InlineData(Stack, "Missing", false)]
+    public async Task Decompile_OnAReferenceAssembly_IsRefused(string typeName, string? memberName, bool second)
+    {
+        var path = CodelessAssembly.Write(CodelessAssembly.Kind.Marked, second);
+        try
+        {
+            Assert.Equal(
+                Refusal + "there is no code to decompile; ask the build the library runs as. find_methods and " +
+                "list_members read declarations alone and answer here.",
+                await CallToolError("decompile", Decompile(path, typeName, memberName)));
+        }
+        finally
+        {
+            CodelessAssembly.TryDelete(path);
+        }
+    }
+
+    // Without the mark, the same code answers: Stack's constructor sets Size, and Count returns 1.
     [Fact]
-    public async Task Analyze_AndSearchCode_WithoutTheMark_ReadTheCode()
+    public async Task Analyze_SearchCode_AndDecompile_WithoutTheMark_ReadTheCode()
     {
         var path = CodelessAssembly.Write(CodelessAssembly.Kind.Code, second: false);
         try
@@ -137,11 +165,20 @@ public sealed class ReferenceAssemblyTests : IClassFixture<ILensServerFixture>
                 await CallToolText("analyze", Analyze(path, Stack, "Size", "assigned_by")));
             Assert.Contains("  Size = 1;",
                 (await CallToolText("search_code", new() { ["assembly"] = path, ["regex"] = "Size = 1" })).Split('\n'));
+            Assert.Contains("return 1;", await CallToolText("decompile", Decompile(path, Stack, "Count")));
         }
         finally
         {
             CodelessAssembly.TryDelete(path);
         }
+    }
+
+    private static Dictionary<string, object?> Decompile(string path, string typeName, string? memberName)
+    {
+        var arguments = new Dictionary<string, object?> { ["assembly"] = path, ["type_name"] = typeName };
+        if (memberName is not null)
+            arguments["member_name"] = memberName;
+        return arguments;
     }
 
     private static Dictionary<string, object?> Analyze(string path, string typeName, string? memberName, string kind)

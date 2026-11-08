@@ -22,7 +22,13 @@ namespace ILens;
 /// and ends, which gives every line an owner: the member declared directly in a type whose
 /// declaration spans the line, so an accessor's lines belong to its property and a lambda's to
 /// the method it is written in; otherwise the innermost type, for its header, its attributes and
-/// its braces; and none for the using and namespace lines, which belong to no type.
+/// its braces; and none for the using and namespace lines, which belong to no type. A declaration
+/// spans the comments the decompiler writes above it, its documentation and notes of its own, so
+/// that a member's documentation belongs to the member and a type's to the type. A member of a
+/// C# 14 extension block owns its lines through the method the compiler made of it, which is
+/// what every other answer names: an accessor's lines belong to its accessor's method, a
+/// property's other lines to its getter's, or its setter's where it has no getter, and the
+/// block's own lines, its header and its braces, to the class.
 ///
 /// Several decompilers run side by side over one type system, as ILSpy's own project export
 /// does. On a game assembly of 16 MB, four threads took 44 s against 90 s for one, eight gained
@@ -154,7 +160,7 @@ public static class CodeTextPass
                 var definition = typeSystem.MainModule.GetDefinition(type);
                 try
                 {
-                    if (texts.Keep(type, Pack(decompiler.DecompileType(definition.FullTypeName), settings)))
+                    if (texts.Keep(type, Pack(AssemblyHost.DecompileTopLevelType(decompiler, definition).Tree, settings)))
                     {
                         limit.TypeFinished();
                     }
@@ -186,7 +192,7 @@ public static class CodeTextPass
     /// </summary>
     private static byte[] Pack(SyntaxTree tree, DecompilerSettings settings)
     {
-        var text = new StringWriter();
+        var text = AssemblyHost.CodeWriter();
         tree.AcceptVisitor(new CSharpOutputVisitor(
             TokenWriter.WrapInWriterThatSetsLocationsInAST(new TextWriterTokenWriter(text)),
             settings.CSharpFormattingOptions));
@@ -209,23 +215,30 @@ public static class CodeTextPass
         // The owner of each line, the outermost declaration first, so that a nested type takes
         // its lines from the type around it and a member its lines from its type.
         var owners = new Dictionary<int, LineRange>();
-        void Own(EntityDeclaration declaration, ITypeDefinition type, bool generated, string name)
+        void Own(EntityDeclaration declaration, ITypeDefinition type, bool generated, string name,
+            EntityDeclaration after)
         {
-            // A declaration's first line is the least line any of its nodes starts on, not its
-            // own start, which is its first child's. At the end of each node the writer takes out
-            // the children it wrote and adds them back in the order it wrote them, and what it
-            // does not count as written stays in front: the comments of a member's documentation,
-            // which the decompiler puts among its type's children, and the target of an attribute
-            // on a return value, [return: ...], which has no location. A type with a documented
-            // member would otherwise start on that member's first comment line, above which its
-            // attributes and header line would have no owner. The leaves are read, since an inner
-            // node's start is its first child's. The children the writer wrote come back last, so
-            // the declaration's own end, its last child's, is its last line.
+            // A declaration's first line is the least line on which one of its leaves, or one of
+            // the comments that lead it, starts, and its last line is that of its last token.
+            // Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: the comments the
+            // decompiler writes above a declaration, its documentation and notes of its own, are
+            // trivia that lead it, kept apart from its children, so that its descendants do not
+            // reach them; the writer writes them once it has opened the declaration, before its
+            // first token. A leaf it gives no line is passed over: the target of an attribute on
+            // a return value, [return: ...], which it writes as a keyword. The cases, in
+            // SearchCodeTests: TheDecompilersNoteAboveADeclaration_StandsUnderIt,
+            // DocumentationLines_StandUnderWhatTheyDocument_AndHeaderLinesUnderTheirClass and
+            // LinesOutsideBodies_StandUnderTheMemberOrTypeTheyBelongTo.
             int first = declaration.Descendants.Where(node => node.FirstChild is null)
+                .Concat(declaration.LeadingTrivia.OfType<Comment>())
                 .Select(node => node.StartLocation.Line).Where(line => line > 0)
                 .DefaultIfEmpty(0).Min();
             if (first < 1)
                 return;
+            // An accessor's keyword and braces are no nodes of the tree, so an accessor written
+            // after another begins on the line after that one's last.
+            if (after is not null && after.EndLocation.Line > 0 && after.EndLocation.Line + 1 < first)
+                first = after.EndLocation.Line + 1;
             var range = new LineRange(first, declaration.EndLocation.Line,
                 (TypeDefinitionHandle)type.MetadataToken, generated, OneLine(name));
             for (int line = range.First; line <= range.Last; line++)
@@ -235,18 +248,22 @@ public static class CodeTextPass
         var declarations = tree.Descendants.OfType<EntityDeclaration>().ToList();
         foreach (var declaration in declarations)
         {
-            if (declaration.GetSymbol() is ITypeDefinition type)
-                Own(declaration, type, CompilerGeneratedFilter.IsCompilerGenerated(type), ReferenceFormatter.FormatTypeName(type));
+            if (declaration is not ExtensionDeclaration && declaration.GetSymbol() is ITypeDefinition type)
+                Own(declaration, type, CompilerGeneratedFilter.IsCompilerGenerated(type), ReferenceFormatter.FormatTypeName(type),
+                    after: null);
         }
-        // A member is named in full where another member's name would read alike.
+        // A member is named in full where another member's name would read alike. A block's
+        // members come after its class's, and a property's accessors after the property.
         var members = declarations.OfType<TypeDeclaration>()
             .SelectMany(declaration => declaration.Members)
-            .Select(member => (Declaration: member, Symbol: member.GetSymbol() as IMember))
+            .Select(member => (Declaration: member, Symbol: member.GetSymbol() as IMember, After: (EntityDeclaration)null))
             .Where(member => member.Symbol is { DeclaringTypeDefinition: not null })
+            .Concat(declarations.OfType<ExtensionDeclaration>().SelectMany(BlockOwners))
             .ToList();
         var name = ReferenceFormatter.NamesFor(members.Select(member => member.Symbol));
-        foreach (var (member, symbol) in members)
-            Own(member, symbol.DeclaringTypeDefinition, CompilerGeneratedFilter.IsCompilerGenerated(symbol), name(symbol));
+        foreach (var (member, symbol, after) in members)
+            Own(member, symbol.DeclaringTypeDefinition, CompilerGeneratedFilter.IsCompilerGenerated(symbol), name(symbol),
+                after);
 
         // Neighboring lines of one owner as one range. A type's own lines lie around its
         // members, so a type gives several.
@@ -261,6 +278,47 @@ public static class CodeTextPass
             current = owner;
         }
         return ranges;
+    }
+
+    /// <summary>
+    /// The owners of a C# 14 extension block's lines: each member of the block with the method
+    /// the compiler made of it, a property with its getter's method, or its setter's where it has
+    /// no getter, and after the property each of its accessors with its own, a setter beginning
+    /// after its getter. A member the type system maps to no method is left out, so its lines
+    /// stay with the class.
+    /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: a block is an
+    /// ExtensionDeclaration among its class's members, without a symbol of its own, and each of
+    /// its members carries the member of the compiler's grouping class, which the type system's
+    /// ExtensionInfo maps to the method the compiler made of it (CSharpDecompiler.DoDecompile,
+    /// TypeSystemAstBuilder.ConvertExtension). The case:
+    /// SearchCode_ListsEachLineOfABlockMemberUnderItsMethod in ExtensionBlockTests.
+    /// </remarks>
+    private static IEnumerable<(EntityDeclaration Declaration, IMember Symbol, EntityDeclaration After)> BlockOwners(
+        ExtensionDeclaration block)
+    {
+        foreach (var member in block.Members)
+        {
+            var symbol = member.GetSymbol() as IMember;
+            var extensions = symbol?.ResolveExtensionInfo();
+
+            if (symbol is IProperty property && member is PropertyDeclaration declaration)
+            {
+                var getter = TypeWalker.ImplementationOf(extensions, property.Getter);
+                var setter = TypeWalker.ImplementationOf(extensions, property.Setter);
+                if ((getter ?? setter) is { } owner)
+                    yield return (member, owner, null);
+                if (getter != null && declaration.Getter is { } getterDeclaration)
+                    yield return (getterDeclaration, getter, null);
+                if (setter != null && declaration.Setter is { } setterDeclaration)
+                    yield return (setterDeclaration, setter, declaration.Getter);
+            }
+            else if (symbol is IMethod method && TypeWalker.ImplementationOf(extensions, method) is { } owner)
+            {
+                yield return (member, owner, null);
+            }
+        }
     }
 
     // A name is one row of the table. Only an obfuscated name can hold a tab or a line end.

@@ -10,8 +10,10 @@ namespace ILens;
 public static class ServerInstructions
 {
     /// <summary>
-    /// The length at which Claude Code cuts a server's instructions by default. The directory list
-    /// is shortened to keep the whole text within it, so a cut never falls on the tools.
+    /// The length ILens keeps its instructions within, since every session that loads them pays
+    /// for them and older versions of Claude Code cut them at this length, as the summary of
+    /// LengthLimit in Tests/ToolSchemaTests.cs records. The directory list is shortened to keep
+    /// the whole text within it, so a client's cut never falls on the tools.
     /// </summary>
     public const int MaxLength = 2048;
 

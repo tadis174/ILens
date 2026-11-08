@@ -224,14 +224,15 @@ public sealed class ToolSchemaTests : IClassFixture<ILensServerFixture>
     }
 
     [Fact]
-    public async Task ToolDescriptions_StayWithinTheLengthClaudeCodeCutsAt()
+    public async Task ToolDescriptions_StayWithinTheLengthLimit()
     {
-        // A longer description would reach the model without its end, and nothing would say so.
+        // A client that cuts at this length would pass a longer description to the model without
+        // its end, and nothing would say so.
         foreach (var tool in await Tools())
         {
             int length = tool.Description?.Length ?? 0;
-            Assert.True(length <= ClaudeCodeLimit,
-                $"{tool.Name}'s description is {length} characters, over Claude Code's limit of {ClaudeCodeLimit}.");
+            Assert.True(length <= LengthLimit,
+                $"{tool.Name}'s description is {length} characters, over the limit of {LengthLimit}.");
         }
     }
 
@@ -243,8 +244,8 @@ public sealed class ToolSchemaTests : IClassFixture<ILensServerFixture>
         // are where a model first learns which tool answers what.
         string instructions = _server.Client.ServerInstructions ?? "";
 
-        Assert.True(instructions.Length <= ClaudeCodeLimit,
-            $"The instructions are {instructions.Length} characters, over Claude Code's limit of {ClaudeCodeLimit}.");
+        Assert.True(instructions.Length <= LengthLimit,
+            $"The instructions are {instructions.Length} characters, over the limit of {LengthLimit}.");
         foreach (var tool in await Tools())
             Assert.Matches($@"\b{tool.Name}\b", instructions);
         foreach (var root in _server.AllowRoots)
@@ -268,12 +269,12 @@ public sealed class ToolSchemaTests : IClassFixture<ILensServerFixture>
                 Command = ILensServerFixture.ResolveILensExecutable(),
                 Arguments = [.. roots.SelectMany(root => new[] { "--allow-root", root })],
             });
-            await using var client = await McpClient.CreateAsync(transport);
+            await using var client = await ILensServerFixture.ConnectAsync(transport);
             string instructions = client.ServerInstructions ?? "";
 
             int shown = roots.Count(root => instructions.Contains(root));
-            Assert.True(instructions.Length <= ClaudeCodeLimit,
-                $"The instructions are {instructions.Length} characters, over Claude Code's limit of {ClaudeCodeLimit}.");
+            Assert.True(instructions.Length <= LengthLimit,
+                $"The instructions are {instructions.Length} characters, over the limit of {LengthLimit}.");
             Assert.InRange(shown, 1, roots.Count - 1);
             Assert.Contains($"and {roots.Count - shown} more, which list_allowed_roots lists", instructions);
             Assert.Contains("find_harmony_dependencies:", instructions);
@@ -288,10 +289,14 @@ public sealed class ToolSchemaTests : IClassFixture<ILensServerFixture>
     }
 
     /// <summary>
-    /// The length at which Claude Code cuts a server's instructions and each tool description by
-    /// default.
+    /// The length ILens keeps its instructions and each tool description within, a limit it sets
+    /// itself. Claude Code's cuts, as its MCP documentation and changelog gave them on 2026-10-31:
+    /// a Claude Code before v2.1.296 cuts the instructions and a description loaded upfront at
+    /// 2,048, and later versions at 4,096; one before v2.1.295 cuts a description loaded through
+    /// tool search at 2,048 as well, and later versions at 16,384. Tool search matches a query
+    /// only against the part of a description within the shorter limit.
     /// </summary>
-    private const int ClaudeCodeLimit = 2048;
+    private const int LengthLimit = 2048;
 
     /// <summary>
     /// The server's instructions with the directories it reads taken out, since a directory name

@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace ExternalLib.Passing
 {
     // A parameter passed by reference with each keyword, on every kind of method whose
@@ -66,4 +68,18 @@ namespace ExternalLib.Passing
 
         public void Trade(IDepot depot) => depot.Swap(ref ToSwap);
     }
+
+    // A params collection beside a params array. The compiler marks the collection with an
+    // attribute that only a type system built for C# 13 reads, while any reads the array.
+    public class Ledger
+    {
+        public int Log(params IEnumerable<string> lines) => 0;
+        public int Sum(params int[] values) => 0;
+    }
+}
+
+namespace System.Runtime.CompilerServices
+{
+    /// <summary>The attribute a params collection carries, which netstandard2.0 lacks.</summary>
+    internal sealed class ParamCollectionAttribute : Attribute { }
 }

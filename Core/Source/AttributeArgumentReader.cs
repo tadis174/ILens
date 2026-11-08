@@ -600,7 +600,7 @@ public sealed class AttributeArgumentReader
         NamedType named = default;
         try
         {
-            var type = ReflectionHelper.ParseReflectionName(name).Resolve(_context);
+            var type = ReflectionHelper.ParseReflectionName(name, _context);
             named = new(_names(type), SizeOf(type.GetDefinition()), type);
         }
         catch (ReflectionNameParseException)

@@ -27,6 +27,10 @@ public static class DecompileTool
 
         using var lease = registry.GetOrLoad(assembly);
         var host = lease.Host;
+        // A reference assembly's bodies are placeholders, which would read as its code. The check
+        // comes before any name is resolved, since no name of it has code to show.
+        if (host.IsReferenceAssembly)
+            throw AssemblyHost.ReferenceAssemblyError("there is no code to decompile", AssemblyHost.AskForCodeElsewhere);
         var resolver = host.Resolver;
 
         // An array has no code of its own, but an extension method this assembly declares for it
@@ -69,7 +73,12 @@ public static class DecompileTool
                 throw new ArgumentException(
                     $"{nameof(parameter_count)}, {nameof(parameter_types)} and {nameof(return_type)} select a " +
                     $"method overload, so they need {nameof(member_name)}.");
-            return host.DecompileType(type);
+            // A top-level type comes with its namespace, and a nested type alone, under a comment
+            // that names it, as one names a member; so does a top-level type the decompiler
+            // writes no declaration for, such as an anonymous type.
+            return type.DeclaringTypeDefinition is null
+                ? host.DecompileType(type)
+                : $"// {ReferenceFormatter.FormatTypeName(type)}\n{host.DecompileNestedType(type)}";
         }
 
         var (symbol, origin, _) = resolver.ResolveMember(type, member_name, hint);

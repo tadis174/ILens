@@ -8,7 +8,9 @@ namespace BaseShift
     public class Gauge
     {
         private int _value;
+#pragma warning disable CS0169 // Used under SHIFTED alone; both builds declare it, so Gauge differs only inside accessor bodies.
         private int _subscriptions;
+#pragma warning restore CS0169
         private EventHandler _changed;
 
         public int Level

@@ -68,6 +68,9 @@ public static class AnalysisDispatch
             [AnalysisKind.Implements]       = new(null,                Noun.Regular("interface member"), "implemented by", Set(SymbolCategory.Method, SymbolCategory.Property, SymbolCategory.Event), AsksWhoUses: false, ReadsCode: false),
             [AnalysisKind.ReadBy]           = new(null,                Noun.Regular("reader"),           "of",             Set(SymbolCategory.Field, SymbolCategory.Property), AsksWhoUses: true,  ReadsCode: true),
             [AnalysisKind.AssignedBy]       = new(null,                Noun.Regular("writer"),           "of",             Set(SymbolCategory.Field, SymbolCategory.Property), AsksWhoUses: true,  ReadsCode: true),
+            // CallSiteReport writes call_sites' header in its own words, and CallSiteFinder puts
+            // each call under the member it was written in, so of this row only the categories
+            // and ReadsCode are read.
             [AnalysisKind.CallSites]        = new(null,                Noun.Regular("call"),             "to",             Set(SymbolCategory.Method), AsksWhoUses: true,  ReadsCode: true),
         };
 

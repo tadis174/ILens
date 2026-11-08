@@ -3,13 +3,13 @@ using System.Text.RegularExpressions;
 using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.Decompiler.TypeSystem.Implementation;
-using SyntaxIdentifier = ICSharpCode.Decompiler.CSharp.Syntax.Identifier;
 
 namespace ILens;
 
 /// <summary>
 /// Renders symbols and types as call-site references — fully qualified names,
-/// no accessibility/modifiers. Used by analyze tool output.
+/// no accessibility/modifiers. Every tool that names a symbol or type in its results,
+/// headers or errors names it through this class.
 /// For declaration-style signatures see <see cref="SignatureFormatter"/>.
 /// </summary>
 public static class ReferenceFormatter
@@ -634,7 +634,7 @@ public static class ReferenceFormatter
     /// The conditions on <paramref name="parameter"/> as C# writes them in its where clause and the
     /// decompiled code shows them: class, struct, unmanaged or notnull first, then the types, each
     /// written by <paramref name="writeType"/>, then new() unless struct, and last
-    /// <c>allows ref struct</c> (<see cref="TypeWalker.AllowsRefStruct"/>), where C# requires it.
+    /// <c>allows ref struct</c> (<c>ITypeParameter.AllowsRefLikeType</c>), where C# requires it.
     /// Neither <c>class?</c> nor a '?' on a type it names is written, as ILens writes no annotation
     /// of a reference type. Empty for a type parameter without conditions.
     /// </summary>
@@ -650,7 +650,7 @@ public static class ReferenceFormatter
         conditions.AddRange(TypeWalker.WrittenConstraints(parameter).Select(writeType));
         if (parameter.HasDefaultConstructorConstraint && !parameter.HasValueTypeConstraint)
             conditions.Add("new()");
-        if (TypeWalker.AllowsRefStruct(parameter))
+        if (parameter.AllowsRefLikeType)
             conditions.Add("allows ref struct");
         return conditions;
     }
@@ -888,6 +888,9 @@ public static class ReferenceFormatter
         if (string.IsNullOrEmpty(name))
             return name;
         var start = name.LastIndexOf('.') + 1;
-        return CSharpOutputVisitor.IsKeyword(name[start..], SyntaxIdentifier.Null) ? name.Insert(start, "@") : name;
+        return CSharpOutputVisitor.IsKeyword(name[start..], OutsideAnyMember) ? name.Insert(start, "@") : name;
     }
+
+    /// <summary>An empty tree: as a context it lies in no query and no async member.</summary>
+    private static readonly ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree OutsideAnyMember = new();
 }

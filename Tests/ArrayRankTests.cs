@@ -150,8 +150,7 @@ public sealed class ArrayRankTests : IClassFixture<ILensServerFixture>
     {
         string text = await CallToolText("decompile", Question("Layers", "Put", parameterType));
 
-        // The decompiled code may end its lines with a carriage return.
-        Assert.Equal(declaration, text.Split('\n')[1].TrimEnd('\r'));
+        Assert.Equal(declaration, text.Split('\n')[1]);
         Assert.Contains(body, text);
     }
 

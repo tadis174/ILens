@@ -1,10 +1,10 @@
 namespace CallShapes
 {
     /// <summary>
-    /// A virtual method and a virtual property overridden over two levels, and the method also
-    /// by a class beside them. C# compiles a call on any of these types as a call to the
-    /// declaration in <see cref="Creature"/>, and a call through <c>base.</c> as a call to the
-    /// declaration it names.
+    /// A virtual method overridden over two levels and by a class beside them, and a virtual
+    /// property overridden one level down. C# compiles a call on any of these types as a call
+    /// to the declaration in <see cref="Creature"/>, and a call through <c>base.</c> as a call
+    /// to the declaration it names.
     /// </summary>
     public class Creature
     {

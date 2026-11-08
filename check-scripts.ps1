@@ -3,8 +3,8 @@
 # A syntactically broken .ps1 (e.g. an install.ps1 with an unparseable `$var:`
 # reference) fails to parse before it runs a single line — and nothing else in
 # the build catches it: the end-to-end tests exercise the MCP server, and
-# check.ps1 / check-staged.ps1 cover attribution. This gate runs as part of the
-# /publish flow (the _ILensReleaseFlow target in Core/Core.csproj).
+# check.ps1 / check-staged.ps1 cover attribution. This gate runs in the release
+# flow of dotnet publish (the _ILensReleaseFlow target in Core/Core.csproj).
 #
 # Exit codes: 0 = all scripts parse, 1 = at least one failed to parse.
 

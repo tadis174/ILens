@@ -1,5 +1,4 @@
-# ILens field-test installer. Committed and Claude-skill-independent — invoke it
-# by hand or from the /publish gate; it does not depend on Claude.
+# ILens field-test installer.
 #
 # Replaces the machine-wide winget installation of ILens with a build of the
 # current working tree, so every MCP client on this box exercises the code being
@@ -9,9 +8,15 @@
 # Modes:
 #   (no args)   Build the working tree and install it over the winget binary.
 #   -Verify     Build the working tree and report whether the installed binary
-#               already matches it. Touches no repository or install state — this
-#               is the /publish gate.
+#               already matches it. Touches no repository or install state, and
+#               stops only the ILens servers whose command line names the Release
+#               build output. A release is published only once it reports a
+#               match; dotnet publish does not run it.
 #   -Restore    Put the backed-up genuine release binary back.
+#   -Released   Remove the backup once the release of the installed build is
+#               live: the installed binary is then that release, and the backup
+#               holds the one before it. Run it once the GitHub release
+#               exists.
 #
 # Verify works by comparison rather than by a recorded marker because a Release
 # publish is byte-reproducible: two publishes of identical source produce an
@@ -25,7 +30,8 @@
 
 param(
     [switch]$Verify,
-    [switch]$Restore
+    [switch]$Restore,
+    [switch]$Released
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,8 +39,8 @@ $ErrorActionPreference = 'Stop'
 # own exit codes below — a non-zero native exit must not throw.
 $PSNativeCommandUseErrorActionPreference = $false
 
-if ($Verify -and $Restore) {
-    Write-Host "[SETUP] -Verify and -Restore are mutually exclusive."
+if (@($Verify, $Restore, $Released | Where-Object { $_ }).Count -gt 1) {
+    Write-Host "[SETUP] -Verify, -Restore and -Released are mutually exclusive."
     exit 2
 }
 
@@ -56,20 +62,37 @@ function Get-InstalledExe {
     return @(Get-ChildItem $pattern -ErrorAction SilentlyContinue)
 }
 
-# A running ILens holds an exclusive lock on its own image and on the Release
-# build output it was started from, so both the build and the overwrite need it
-# gone. Every ILens process on this box runs the binary being replaced, so
-# stopping all of them is correct rather than over-broad.
-function Stop-RunningILens {
-    $running = @(Get-Process ILens -ErrorAction SilentlyContinue)
+# A running ILens holds an exclusive lock on its own image and on the files it has
+# read under its allow-roots. The build replaces the Release output, so only the
+# servers whose command line names Build/bin/Core/Release, as an allow-root or as
+# the path they were started from, need to stop for it; servers of other projects
+# keep running. A client may give that allow-root relative to its own folder, so
+# the match is not tied to this repository and also stops such servers of another
+# checkout, while a server whose allow-root lies above the Release output, such as
+# the repository's root, is passed over, and the build then fails naming it. The
+# overwrite needs every ILens gone, since the servers of every project run the
+# binary being replaced.
+function Stop-RunningILens([switch]$BuildOutputOnly) {
+    $running = @(Get-CimInstance Win32_Process -Filter "Name='ILens.exe'")
+    $what = 'running ILens process(es)'
+    if ($BuildOutputOnly) {
+        $running = @($running | Where-Object { $_.CommandLine -like '*Build?bin?Core?Release*' })
+        $what = 'ILens process(es) that name the Release build output'
+    }
     if ($running.Count -gt 0) {
-        Write-Host "Stopping $($running.Count) running ILens process(es)..."
-        $running | Stop-Process -Force
+        Write-Host "Stopping $($running.Count) $what..."
+        # As process objects, which pass over a process that has exited since the
+        # query, where a stop by its id would fail.
+        $processes = @($running | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+        $processes | Stop-Process -Force
+        # Stop-Process returns before the processes have exited, and their files
+        # are free only then.
+        $processes | Wait-Process -Timeout 10
     }
 }
 
 function Build-WorkingTree([string]$destination) {
-    Stop-RunningILens
+    Stop-RunningILens -BuildOutputOnly
 
     if (Test-Path $destination) {
         Remove-Item $destination -Recurse -Force
@@ -120,6 +143,19 @@ if ($Restore) {
     exit 0
 }
 
+if ($Released) {
+    if (-not (Test-Path $backupExe)) {
+        Write-Host "[OK] No backup at $backupExe — nothing to remove."
+        exit 0
+    }
+    # The version resource holds the number --version prints, so the backup need
+    # not be started to name it.
+    $held = (Get-Item $backupExe).VersionInfo.ProductVersion
+    Remove-Item $backupExe -Force
+    Write-Host "[OK] Removed the backup (ILens $held)."
+    exit 0
+}
+
 $installed = Get-InstalledExe
 if ($installed.Count -gt 1) {
     Write-Host "[SETUP] Expected at most one winget install of Tadis.ILens, found $($installed.Count):"
@@ -165,13 +201,15 @@ if (-not $built) { exit 2 }
 
 # Back up the genuine release binary once, so -Restore has something to put back.
 # Only on the first field test — a second one would otherwise overwrite the
-# backup with the previous dev build.
+# backup with the previous dev build. -Released removes it once the release is
+# live, so the first field test of the next cycle backs up that release.
 if (-not (Test-Path $backupExe)) {
     New-Item -ItemType Directory -Force (Split-Path $backupExe) | Out-Null
     Copy-Item $target $backupExe
     Write-Host "Backed up the published binary ($(& $target --version)) for -Restore."
 }
 
+Stop-RunningILens
 Copy-Item $built $target -Force
 Write-Host "[OK] Field-test build installed over the winget binary."
 Write-Host "     $target"

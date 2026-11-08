@@ -109,7 +109,7 @@ public sealed class ByReferenceUseTests
             Path.Combine(Path.GetTempPath(), "ILens-keywords-" + Guid.NewGuid().ToString("N"))).FullName;
 
     private static async Task<McpClient> StartServer(string name, string root) =>
-        await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+        await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
         {
             Name = name,
             Command = ILensServerFixture.ResolveILensExecutable(),

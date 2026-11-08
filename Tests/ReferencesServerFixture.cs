@@ -31,7 +31,7 @@ public sealed class ReferencesServerFixture : IAsyncLifetime
             Command = ILensServerFixture.ResolveILensExecutable(),
             Arguments = ["--allow-root", testOutput, "--allow-root", references],
         });
-        Client = await McpClient.CreateAsync(transport);
+        Client = await ILensServerFixture.ConnectAsync(transport);
     }
 
     public async Task DisposeAsync()

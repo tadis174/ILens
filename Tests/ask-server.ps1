@@ -25,7 +25,10 @@
 #
 # Options:
 #   -AllowRoot <dir>[,<dir>...]
-#                      The directories the server may read assemblies from.
+#                      The directories the server may read assemblies from. Without
+#                      it the server may read none: -ToolList and -ToolParameters
+#                      need none, and a call that names an assembly gets the
+#                      server's error that no allowed root is configured.
 #   -ServerArgument <arg>[,<arg>...]
 #                      Further startup arguments for the server, each option and each
 #                      value an entry of its own: -ServerArgument '--max-total-size', '64'.
@@ -45,9 +48,16 @@
 # Exit codes: 0 = every call was answered, 1 = a tool answered with an error,
 # 2 = anything else: usage, build, a server that did not start, stopped answering
 # or took longer than -TimeoutSeconds, or an error of this script.
+#
+# Output cut short, by Select-Object -First or by Bash's head after pwsh, changes
+# only what is shown: every call is still asked, the server log written, and the
+# exit code is that of the whole run.
 
+[CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string[]]$AllowRoot,
+    # Not mandatory: PowerShell asks for a missing mandatory value, and a session that
+    # runs this script from a shell whose input stays open waits until its command is cut off.
+    [string[]]$AllowRoot,
     [string[]]$ServerArgument,
     [string]$Tool,
     $Arguments,
@@ -66,7 +76,19 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 # An error nothing below handles ends the script with 2. PowerShell's own exit
 # code for it is 1, which a caller would read as a tool's error answer.
+# Output cut short by the caller, as by Select-Object -First, stops the script at
+# its next write with a PipelineStoppedException, which no catch block sees. A
+# trap's continue goes on after the statement of the trap's own block that holds
+# the write: here the try below, whose finally block ends the server, and what
+# follows a write there only writes lines the cut drops; the loop over the calls
+# has a trap of its own, so that every call is still asked. A write therefore
+# stands in a block with such a trap or last in a block inside it. Ctrl+C raises
+# the same exception but sets $PSCmdlet.Stopping, which both traps pass on, so it
+# ends the script, which runs only its finally blocks then. break on a cut, a trap
+# for that type alone with an empty body, or a trap in a function that writes the
+# line would end the calling script without a word.
 trap {
+    if ($_.Exception -is [System.Management.Automation.PipelineStoppedException] -and -not $PSCmdlet.Stopping) { continue }
     Write-Host "[SETUP] $($_.Exception.Message)"
     exit 2
 }
@@ -142,14 +164,18 @@ function Send-Message([hashtable]$message) {
 # else the server writes, such as a notification, is passed over.
 function Receive-Response([int]$id) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    # A stop or an error while the answer is awaited leaves this set, and the finally
+    # block below then kills the server rather than letting it end the call in flight.
+    $script:awaitingAnswer = $true
     while ($true) {
         $read = $proc.StandardOutput.ReadLineAsync()
-        if ($TimeoutSeconds -gt 0) {
-            $left = $deadline - [DateTime]::UtcNow
-            if ($left -le [TimeSpan]::Zero -or -not $read.Wait($left)) {
+        # Waits in slices, since a stop, as by Ctrl+C, takes effect only between two
+        # statements: one wait for the whole answer holds the stop until the answer comes.
+        do {
+            if ($TimeoutSeconds -gt 0 -and [DateTime]::UtcNow -ge $deadline) {
                 throw "The server did not answer request $id within $TimeoutSeconds seconds."
             }
-        }
+        } until ($read.Wait(200))
         $line = $read.GetAwaiter().GetResult()
         if ($null -eq $line) { throw "The server closed its output before answering request $id." }
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -158,6 +184,7 @@ function Receive-Response([int]$id) {
         if ($message.TryGetProperty('id', [ref]$messageId) -and
             $messageId.ValueKind -eq [System.Text.Json.JsonValueKind]::Number -and
             $messageId.GetInt32() -eq $id) {
+            $script:awaitingAnswer = $false
             return $message
         }
     }
@@ -171,6 +198,7 @@ function Get-RpcError([System.Text.Json.JsonElement]$response) {
 
 $toolFailed = $false
 $problem = $null
+$awaitingAnswer = $false
 try {
     Send-Message @{ jsonrpc = '2.0'; id = 1; method = 'initialize'; params = @{
         protocolVersion = '2025-06-18'; capabilities = @{}; clientInfo = @{ name = 'ask-server'; version = '1' } } }
@@ -221,6 +249,11 @@ try {
 
     $id = 2
     foreach ($call in $calls) {
+        # Goes on with this loop after a cut, as the comment on the trap at the top says.
+        trap [System.Management.Automation.PipelineStoppedException] {
+            if ($PSCmdlet.Stopping) { break }
+            continue
+        }
         $callArguments = $call['arguments'] ?? @{}
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
         Send-Message @{ jsonrpc = '2.0'; id = $id; method = 'tools/call'; params = @{ name = $call['name']; arguments = $callArguments } }
@@ -258,8 +291,14 @@ catch {
     $problem = $_.Exception.Message
 }
 finally {
-    try { $proc.StandardInput.Close() } catch { }
-    if (-not $proc.WaitForExit(10000)) { $proc.Kill($true) }
+    # A server that answers nothing, or a stop, as by Ctrl+C, in the middle of a call:
+    # closing its input would let a server busy with the call hold the stop up to 10 s.
+    # The kill fails only where the server has ended already.
+    if ($awaitingAnswer) { try { $proc.Kill($true) } catch { } }
+    else {
+        try { $proc.StandardInput.Close() } catch { }
+        if (-not $proc.WaitForExit(10000)) { $proc.Kill($true) }
+    }
 }
 
 $log = $stderr.Result

@@ -63,9 +63,9 @@ public sealed class CallShapesTests : IClassFixture<ILensServerFixture>
                 "ProjectReference.");
     }
 
-    // One row per ILSpyX analyzer behind an incoming question, since each treats generated
-    // code differently: a plain call, a field read, a field write, a virtual call, an
-    // instantiation, and a use of the type as a whole.
+    // One row per shape of use an incoming question finds: a plain call, a field read, a field
+    // write, a virtual call, an instantiation, and a use of the type as a whole. Only
+    // instantiated_by runs an ILSpyX analyzer; ILens's own scanners answer the others.
     public static TheoryData<string, string?, string> IncomingQuestions => new()
     {
         { "CallShapes.Target", "Record", "used_by" },

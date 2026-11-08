@@ -3,8 +3,4 @@ Build/*
 Build/doc/*
 !Build/doc/guide.html
 .vs/
-CLAUDE.md
-.claude/
-.mcp.json
-backlog/
 manifests/

@@ -112,12 +112,36 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
             text.Split('\n'));
     }
 
+    [Fact]
+    public async Task Compare_ChangedTypes_WhenAnotherAssemblysBaseTypeOrInterfaceChanges_ReportsAMetadataChange()
+    {
+        // BaseShift.Foreign's base classes and interfaces are the framework's, which ILens's own
+        // type system does not load, so only their metadata says which is a base class and which
+        // an interface. Mover's new base class changes its constructor's base call as well.
+        string text = await CallToolText("compare", new()
+        {
+            ["assembly_a"] = BaseShiftPath("BaseShift.dll"),
+            ["assembly_b"] = BaseShiftPath("BaseShift2.dll"),
+            ["namespace"] = "BaseShift.Foreign",
+        });
+
+        Assert.Equal(
+            new[]
+            {
+                "2 changed types:",
+                "~ BaseShift.Foreign.Mover [metadata,bodies]",
+                "~ BaseShift.Foreign.Switcher [metadata]",
+            },
+            text.Split('\n'));
+    }
+
     // A type the type list marks metadata ends its member changes with its two declarations, as
     // list_members writes the heading, since no member shows such a change: a base class or an
     // interface, a condition and an in or out. Rebased.Mover's base class gives way to a class of
     // the same name in another namespace, so its declarations are written in full, and so are
-    // Rebased.Sealer's, whose base class moves so while it becomes sealed. Gauge, whose accessor
-    // bodies alone change, has no such line.
+    // Rebased.Sealer's, whose base class moves so while it becomes sealed. Foreign.Mover's base
+    // class and Foreign.Switcher's interface are the framework's. Gauge, whose accessor bodies
+    // alone change, has no such line.
     [Theory]
     [InlineData("BaseShift.InterfaceArgumentMover", new[]
     {
@@ -141,6 +165,17 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
         "1 member change in BaseShift.Rebased.Sealer:",
         "~ public Sealer()",
         "Declaration: public class BaseShift.Rebased.Sealer : BaseShift.Rebased.Alpha.Origin → public sealed class BaseShift.Rebased.Sealer : BaseShift.Rebased.Beta.Origin",
+    })]
+    [InlineData("BaseShift.Foreign.Mover", new[]
+    {
+        "1 member change in BaseShift.Foreign.Mover:",
+        "~ public Mover()",
+        "Declaration: public class BaseShift.Foreign.Mover : EventArgs → public class BaseShift.Foreign.Mover : CancelEventArgs",
+    })]
+    [InlineData("BaseShift.Foreign.Switcher", new[]
+    {
+        "No member changes in BaseShift.Foreign.Switcher",
+        "Declaration: public class BaseShift.Foreign.Switcher : IComparable → public class BaseShift.Foreign.Switcher : ICloneable",
     })]
     [InlineData("BaseShift.Declarations.Holder<>", new[]
     {
@@ -931,7 +966,7 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
             ["member_name"] = memberName,
         });
 
-        Assert.Equal(expected, text.Replace("\r\n", "\n"));
+        Assert.Equal(expected, text);
     }
 
     [Fact]
@@ -949,7 +984,7 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
             "// BaseShift.Kinds.Till.Limit is a property in A and a field in B: " +
             "public int Limit { get; set; } → public int Limit\n\n" +
             "// A: BaseShift.Kinds.Till.Limit\npublic int Limit { get; set; }\n",
-            text.Replace("\r\n", "\n"));
+            text);
     }
 
     [Fact]
@@ -963,7 +998,6 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
             ["member_name"] = "Open",
             ["format"] = "il",
         });
-        text = text.Replace("\r\n", "\n");
 
         Assert.StartsWith(
             "// BaseShift.Kinds.Till.Open is a method in A and a property in B: " +
@@ -985,7 +1019,7 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
             ["parameter_count"] = 0,
         });
 
-        Assert.StartsWith("// BaseShift.Kinds.Till.Open() → void — only A has it.\n\n", text.Replace("\r\n", "\n"));
+        Assert.StartsWith("// BaseShift.Kinds.Till.Open() → void — only A has it.\n\n", text);
     }
 
     [Theory]
@@ -1125,6 +1159,29 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
         finally
         {
             SameKeyAssembly.TryDelete(a, b);
+        }
+    }
+
+    [Fact]
+    public async Task Compare_ChangedTypes_WhenABaseClassCannotBeDecoded_MarksTheTypeInsteadOfFailing()
+    {
+        // A base class whose signature cannot be decoded counts as unknown, as ILSpy reads it, so
+        // the class is marked against the build that names List<int>, and the comparison of the
+        // other types does not end in an error.
+        var a = BrokenBaseAssembly.Write(broken: true);
+        var b = BrokenBaseAssembly.Write(broken: false);
+        try
+        {
+            string text = await CallToolText("compare", new()
+            {
+                ["assembly_a"] = a,
+                ["assembly_b"] = b,
+            });
+            Assert.Equal(new[] { "1 changed type:", "~ BrokenBase.Item [metadata]" }, text.Split('\n'));
+        }
+        finally
+        {
+            BrokenBaseAssembly.TryDelete(a, b);
         }
     }
 
@@ -1527,7 +1584,7 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
             ["member_name"] = memberName,
         });
 
-        Assert.Equal(expected, text.Replace("\r\n", "\n"));
+        Assert.Equal(expected, text);
     }
 
     [Fact]
@@ -1541,7 +1598,6 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
             ["member_name"] = "Title",
             ["format"] = "il",
         });
-        text = text.Replace("\r\n", "\n");
 
         Assert.StartsWith(
             "// BaseShift.Sides.Panel.Title — only B has it.\n\n// BaseShift.Sides.Panel.get_Title() → string\n", text);
@@ -1948,7 +2004,7 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
             $"The diff has {diff.Length} characters, the two bodies {a.Length + b.Length}.");
     }
 
-    // Settle's code as decompile prints it, without its header line and with \n line ends.
+    // Settle's code as decompile prints it, without its header line.
     private async Task<string> DecompiledSettle(string fileName)
     {
         string text = await CallToolText("decompile", new()
@@ -1957,7 +2013,7 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
             ["type_name"] = "BaseShift.Diffs.Ledger",
             ["member_name"] = "Settle",
         });
-        return string.Join("\n", text.Replace("\r\n", "\n").TrimEnd('\n').Split('\n').Skip(1));
+        return string.Join("\n", text.TrimEnd('\n').Split('\n').Skip(1));
     }
 
     [Fact]
@@ -2116,6 +2172,26 @@ public sealed class ComparisonTests : IClassFixture<ILensServerFixture>
             "\n", result.Content.OfType<TextContentBlock>().Select(b => b.Text));
         Assert.True(result.IsError, $"Expected a rejection, got: {text}");
         Assert.Contains("include_compiler_generated applies only without member_name.", text);
+    }
+
+    [Fact]
+    public async Task Compare_Bodies_WithLimit_ReturnsError()
+    {
+        // The two bodies of one member are not a list, so a limit has nothing to cut there.
+        CallToolResult result = await _server.Client.CallToolAsync("compare",
+            new Dictionary<string, object?>
+            {
+                ["assembly_a"] = _server.AssemblyPath,
+                ["assembly_b"] = _server.AssemblyPath,
+                ["type_name"] = "ICSharpCode.Decompiler.DecompilerSettings",
+                ["member_name"] = "get_ThrowOnAssemblyResolveErrors",
+                ["limit"] = 5,
+            });
+
+        string text = string.Join(
+            "\n", result.Content.OfType<TextContentBlock>().Select(b => b.Text));
+        Assert.True(result.IsError, $"Expected a rejection, got: {text}");
+        Assert.Contains("limit applies only without member_name.", text);
     }
 
     [Fact]

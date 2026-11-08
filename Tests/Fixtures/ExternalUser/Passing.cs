@@ -32,4 +32,9 @@ namespace ExternalUser.Passing
     public class OwnDepot : Depot
     {
     }
+
+    // Declares nothing either: its members are Ledger's, read from ExternalLib.
+    public class OwnLedger : Ledger
+    {
+    }
 }

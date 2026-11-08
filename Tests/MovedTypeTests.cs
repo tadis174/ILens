@@ -67,7 +67,7 @@ public sealed class MovedTypeTests : IClassFixture<MovedTypeTests.FoldersFixture
                 ("ExternalLib.Extended", "Kettle"), ("ExternalLib", "Limits"), ("ExternalLib", "Limits+Deep"),
                 ("ExternalLib.Namesakes", "Marker"));
 
-            Client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            Client = await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = "ILens-moved-types",
                 Command = ILensServerFixture.ResolveILensExecutable(),
@@ -141,7 +141,7 @@ public sealed class MovedTypeTests : IClassFixture<MovedTypeTests.FoldersFixture
         string text = await Compare(_folders.Library, _folders.User, swapped,
             new() { ["type_name"] = typeName, ["member_name"] = memberName });
 
-        Assert.StartsWith(start, text.Replace("\r\n", "\n"));
+        Assert.StartsWith(start, text);
     }
 
     [Fact]
@@ -191,7 +191,7 @@ public sealed class MovedTypeTests : IClassFixture<MovedTypeTests.FoldersFixture
             "public bool Hot { get; set; } → public static bool Hot(this Kettle kettle)\n\n" +
             $"// A: {Kettle}.Hot\npublic bool Hot {{ get; set; }}\n\n" +
             $"// B: {KettleExtensions}.Hot(Kettle) → bool [extension method on {Kettle}]\n",
-            text.Replace("\r\n", "\n"));
+            text);
     }
 
     // Without ExternalLib, ExternalUser's lookup through Kettle knows Kettle's members only from its
@@ -220,9 +220,9 @@ public sealed class MovedTypeTests : IClassFixture<MovedTypeTests.FoldersFixture
             $"// {NotChecked("Hot")}\n" +
             $"// {Kettle}.Hot is a property in A and an extension method in B: " +
             "public bool Hot { get; set; } → public static bool Hot(this Kettle kettle)\n\n",
-            text.Replace("\r\n", "\n"));
+            text);
         Assert.Contains($"// B: {KettleExtensions}.Hot(Kettle) → bool [extension method on {Kettle}]\n",
-            text.Replace("\r\n", "\n"));
+            text);
     }
 
     // Widget is a class the forwarding library neither forwards nor references, so its line stays

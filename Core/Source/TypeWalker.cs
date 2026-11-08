@@ -1,5 +1,3 @@
-using System.Reflection;
-using System.Reflection.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.Decompiler.TypeSystem.Implementation;
 
@@ -318,6 +316,24 @@ public static class TypeWalker
     }
 
     /// <summary>
+    /// The method the compiler made of <paramref name="declared"/>, a method or an accessor of a
+    /// C# 14 extension block's member, which every answer names in its place; null where
+    /// <paramref name="declared"/> is null or <paramref name="extensions"/> maps it to none.
+    /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: GetMembersOfGroup gives a
+    /// block's members specialized to the block's own type parameters, while
+    /// InfoOfExtensionMember looks a member up by the definition the compiler's grouping class
+    /// holds, so it is given the member's MemberDefinition. The case:
+    /// ListMembers_ListsABlocksMembersUnderTheBlock in ExtensionBlockTests, whose block with a
+    /// type parameter lists First.
+    /// </remarks>
+    public static IMethod ImplementationOf(ExtensionInfo extensions, IMethod declared) =>
+        declared is null
+            ? null
+            : extensions?.InfoOfExtensionMember((IMethod)declared.MemberDefinition)?.ImplementationMethod;
+
+    /// <summary>
     /// The type constraints of <paramref name="parameter"/> as C# writes them in its where
     /// clause, in their order: <c>System.Object</c> and <c>System.ValueType</c> left out, which a
     /// constraint names only for struct or unmanaged, written there as that word.
@@ -345,43 +361,6 @@ public static class TypeWalker
     /// </summary>
     public static IEnumerable<ITypeParameter> OwnTypeParameters(ITypeDefinition type) =>
         type.TypeParameters.Skip(type.DeclaringTypeDefinition?.TypeParameterCount ?? 0);
-
-    /// <summary>
-    /// True where <paramref name="parameter"/> may take a ref struct as its type argument, which
-    /// C# 13 writes as <c>allows ref struct</c> and the compiler records as a flag of the type
-    /// parameter's metadata row. ICSharpCode.Decompiler 9.1 reads no such flag, so the row is read
-    /// here. False for a type parameter no definition was read for.
-    /// </summary>
-    public static bool AllowsRefStruct(ITypeParameter parameter)
-    {
-        IEntity owner = parameter.Owner switch
-        {
-            IMethod method => method.MemberDefinition,
-            ITypeDefinition type => type,
-            _ => null,
-        };
-        if (owner is not { ParentModule: MetadataModule module } || owner.MetadataToken.IsNil)
-            return false;
-
-        var metadata = module.MetadataFile.Metadata;
-        GenericParameterHandleCollection rows;
-        if (owner.MetadataToken.Kind == HandleKind.MethodDefinition)
-            rows = metadata.GetMethodDefinition((MethodDefinitionHandle)owner.MetadataToken).GetGenericParameters();
-        else if (owner.MetadataToken.Kind == HandleKind.TypeDefinition)
-            rows = metadata.GetTypeDefinition((TypeDefinitionHandle)owner.MetadataToken).GetGenericParameters();
-        else
-            return false;
-
-        // A nested type's rows number the type parameters of the types enclosing it as well, as
-        // ILSpy's indices do.
-        foreach (var handle in rows)
-        {
-            var row = metadata.GetGenericParameter(handle);
-            if (row.Index == parameter.Index)
-                return (row.Attributes & GenericParameterAttributes.AllowByRefLike) != 0;
-        }
-        return false;
-    }
 
     /// <summary>
     /// True for a type that names a type parameter: one itself, or an array, a pointer, a

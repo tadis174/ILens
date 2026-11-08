@@ -28,6 +28,8 @@ namespace ILens;
 /// it, so there the property says by value for exactly those parameters. And it tells
 /// <c>ref readonly</c> from <c>ref</c> only under an option the decompiler's type system does
 /// not have. The parameter's own metadata row says the keyword whatever the options.</para>
+/// <para>Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: <c>ReferenceKind</c> and
+/// <c>DetectRefKind</c> read as described. The cases: ParameterPassingTests.</para>
 /// <para>The modifiers stay in the type system because they are part of a signature. Built
 /// without them, it made two overloads of a C++/CLI library that differ only in a modifier
 /// print alike, and <c>list_members</c> listed one of them: 20 of 264 answers on one such
@@ -65,9 +67,22 @@ public readonly record struct ParameterPassing(bool ByReference, ReferenceKind K
     /// True where a caller may pass the parameter's arguments one by one: an array ILSpy reads as
     /// params, and a collection the compiler marks with <c>ParamCollectionAttribute</c>, a params
     /// collection of C# 13 such as <c>params ReadOnlySpan&lt;T&gt; items</c>. A declaration asks
-    /// this, not ILSpy's <c>IParameter.IsParams</c>, which reads <c>ParamArrayAttribute</c> on an
-    /// array alone in ICSharpCode.Decompiler 9.1, a version with no setting for C# 13.
+    /// this, not ILSpy's <c>IParameter.IsParams</c> alone, which reads the attribute only in a
+    /// type system built with params collections. ILens's own and the host decompiler's, from
+    /// which <c>list_members</c> reads another assembly's base classes, are both built so, and the
+    /// reader of the attribute keeps a declaration right where a type system is not.
+    /// <c>call_sites</c> does not ask this: it keeps ILSpy's reading on a type system without
+    /// params collections, so that the collection the compiler builds counts as one argument.
     /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050:
+    /// <c>MetadataParameter.IsParams</c> reads the attribute only under
+    /// <c>TypeSystemOptions.ParamsCollections</c>, which a decompiler's type system takes from
+    /// the C# 13 setting <c>DecompilerSettings.ParamsCollections</c>. The case:
+    /// ListMembers_WithInheritedMembersOfAnotherAssembly_WritesParamsBeforeACollection in
+    /// ParameterPassingTests, which reaches the attribute's reader only while the host decompiler
+    /// writes a version below C# 13.
+    /// </remarks>
     public static bool IsParams(IParameter parameter) =>
         parameter.IsParams
         || (RowOf(parameter) is (var metadata, { } row) && Carries(metadata, row, "ParamCollectionAttribute"));

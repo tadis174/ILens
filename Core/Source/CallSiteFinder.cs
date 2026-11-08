@@ -52,9 +52,13 @@ namespace ILens;
 /// in comparing the two counts.
 ///
 /// Whether a written call is virtual is read from the call instruction its node carries, and for
-/// a call that is not, the declaration it names. The written form does not say either: the
-/// decompiler leaves out <c>base.</c> before an override that the calling class does not
-/// override itself, where the plain name means the same method.
+/// a call that is not, the declaration it names. The written form does not say either: a
+/// decompiler can leave out <c>base.</c> where it takes the plain name to mean the same method,
+/// and C# has no form for a call Visual Basic writes through <c>MyClass</c>, which calls an
+/// override of the calling class without virtual dispatch. A property, indexer or event access
+/// is read from the written form alone, as virtual unless it goes through <c>base.</c>, which
+/// the decompiler keeps there, so an access Visual Basic writes through <c>MyClass</c> is
+/// counted under the slot's declaration and its caller reported as a shortfall.
 /// </remarks>
 public static class CallSiteFinder
 {
@@ -292,9 +296,9 @@ public static class CallSiteFinder
             if (arguments is not null && node.GetResolveResult() is InvocationResolveResult { Member: IMethod called } resolved)
             {
                 // The instruction says which declaration the IL names and whether the call is
-                // virtual. The written form does not: the decompiler leaves out "base." where
-                // the plain name means the same method, and a compiler can name an override in
-                // a virtual call, as a C# compiler does for a generic method.
+                // virtual. The written form does not say it reliably: a decompiler can leave out
+                // "base." where the plain name means the same method, and a compiler can name an
+                // override in a virtual call, as a C# compiler does for a generic method.
                 var behind = CallBehind(node, called);
                 BookCall(called, behind is null ? ThroughBase(node) : behind is not IL.CallVirt, () => Render(node),
                     arguments, resolved is CSharpInvocationResolveResult { IsExpandedForm: true }, behind?.Method);
@@ -713,6 +717,12 @@ public static class CallSiteFinder
     /// only when it equals the parameter's default, so an omitted parameter takes its default.
     /// A named argument is mapped by name, should a decompiler setting ever let one through.
     /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: <c>CallBuilder</c> leaves
+    /// out an argument as described, through <c>IsOptionalArgument</c>. The cases:
+    /// FindCallSites_NonDefaultOnly_ListsExactlyTheCallsThatPassAnotherValue and
+    /// FindCallSites_WithoutParameter_ShowsEachCallWithEveryArgument in CallSiteTests.
+    /// </remarks>
     private static IReadOnlyList<Argument> MapArguments(
         IMethod method, IEnumerable<Expression> arguments, bool expandedParams)
     {

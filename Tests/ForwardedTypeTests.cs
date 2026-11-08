@@ -66,7 +66,7 @@ public sealed class ForwardedTypeTests : IClassFixture<ForwardedTypeTests.Forwar
             Library = Path.Combine(Directory.CreateDirectory(Path.Combine(_root, "library")).FullName, "ExternalLib.dll");
             File.Copy(Path.Combine(AppContext.BaseDirectory, "References", "ExternalLib.dll"), Library);
 
-            Client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+            Client = await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = "ILens-forwarded-types",
                 Command = ILensServerFixture.ResolveILensExecutable(),
@@ -244,7 +244,7 @@ public sealed class ForwardedTypeTests : IClassFixture<ForwardedTypeTests.Forwar
             "// Polishes.Polishing.Polish<T>(T) → void [extension method on T]\n" +
             $"// Not checked: whether {Kettle} or its base types have a member Polish, which C# would take first; " +
             $"ILens could not load {FromLib}\n",
-            text.Replace("\r\n", "\n"));
+            text);
     }
 
     // An array of a forwarded type is read as one of a referenced type. Kettle was not read, so the
@@ -283,7 +283,7 @@ public sealed class ForwardedTypeTests : IClassFixture<ForwardedTypeTests.Forwar
             $"ILens could not load {FromLib}\n" +
             $"// {Kettle}.Pour(int) → void in A and Polishes.Polishing.Pour<T>(T, string) → void " +
             "[extension method on T] in B are different methods",
-            text.Replace("\r\n", "\n"));
+            text);
     }
 
     private Task<string> ListMembers(string typeName) =>

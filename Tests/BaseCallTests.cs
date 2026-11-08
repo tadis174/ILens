@@ -200,15 +200,14 @@ public sealed class BaseCallTests : IClassFixture<ILensServerFixture>
     }
 
     // The instruction of each of these calls names the override itself. Arch calls Close through
-    // base. without overriding it, which the decompiler writes without base.; Porter calls the
-    // generic Pass on a Vault, where the compiler names Vault's override. Each call is listed
-    // once, and nothing after the list says a call was not shown. The other two are controls:
-    // a call that names the declaration Vault's Close overrides, and a property read through
-    // base., which the decompiler keeps.
+    // base. without overriding it; Porter calls the generic Pass on a Vault, where the compiler
+    // names Vault's override. Each call is listed once, and nothing after the list says a call
+    // was not shown. The other two are controls: a call that names the declaration Vault's Close
+    // overrides, and a property read through base.
     [Theory]
     [InlineData("Portal", "Close", "Gate.Close(int)",
         "1 call to " + Shapes + "Portal.Close(int):\n" +
-        Shapes + "Arch.Shut()\n  Close(3)\n")]
+        Shapes + "Arch.Shut()\n  base.Close(3)\n")]
     [InlineData("Vault", "Pass", "Gate.Pass<T>(T)",
         "1 call to " + Shapes + "Vault.Pass<T>(T):\n" +
         Shapes + "Porter.Hand(Vault)\n  vault.Pass(5)\n")]
@@ -227,6 +226,22 @@ public sealed class BaseCallTests : IClassFixture<ILensServerFixture>
             expectedCalls +
             "Override: code can call " + Shapes + overridden + " instead; listed are those calls whose receiver's type is " +
             Shapes + typeName + " or derives from it.", text);
+    }
+
+    // Visual Basic's MyClass calls an override of the calling class without virtual dispatch,
+    // and the decompiled C#, which has no such form, writes a plain call: only the instruction
+    // says that the call is not virtual. The call is listed once, and nothing after the list says
+    // a call was not shown.
+    [Fact]
+    public async Task CallSites_OnAnOverrideCalledThroughMyClass_ListsTheCallOnce()
+    {
+        string text = await Analyze("VbModules.dll", "VbModules.Calls.Lamp", "Glow", "call_sites");
+
+        Assert.Equal(
+            "1 call to VbModules.Calls.Lamp.Glow():\n" +
+            "VbModules.Calls.Lamp.Shine()\n  Glow()\n" +
+            "Override: code can call VbModules.Calls.Lantern.Glow() instead; listed are those calls whose " +
+            "receiver's type is VbModules.Calls.Lamp or derives from it.", text);
     }
 
     private Task<string> Analyze(string fixture, string typeName, string? memberName, string kind,

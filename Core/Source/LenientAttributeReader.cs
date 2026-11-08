@@ -23,6 +23,11 @@ namespace ILens;
 /// the value blob, the constructor signature) lives in the scanned module
 /// itself; the referenced enum's defining assembly never has to be loaded.
 /// </summary>
+/// <remarks>
+/// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050:
+/// <c>CustomAttribute.DecodeValue</c> discards the whole argument list as described. The case:
+/// FindHarmonyDependencies_OnTheFixture_ListsEveryDependencyByTarget in HarmonyTests.
+/// </remarks>
 public static class LenientAttributeReader
 {
     /// <summary>One decoded fixed argument. <see cref="ArgType"/> is the rendered

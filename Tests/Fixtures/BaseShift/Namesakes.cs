@@ -33,6 +33,7 @@ namespace BaseShift.Namesakes
 #endif
     }
 
+#pragma warning disable CS0067, CS0649 // compare reads these declarations; nothing assigns Tag or raises Changed.
     public class Retyped
     {
 #if SHIFTED
@@ -63,6 +64,7 @@ namespace BaseShift.Namesakes
 
         public void Hold(Alpha.Badge badge) { }
     }
+#pragma warning restore CS0067, CS0649
 
     public class Kinds
     {

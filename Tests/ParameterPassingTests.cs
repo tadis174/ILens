@@ -314,6 +314,28 @@ public sealed class ParameterPassingTests
             text);
     }
 
+    // Those members are read from the host decompiler's type system, which reads the attribute
+    // that marks a params collection only while the decompiler writes C# 13 or later, and a params
+    // array in any version.
+    [Fact]
+    public async Task ListMembers_WithInheritedMembersOfAnotherAssembly_WritesParamsBeforeACollection()
+    {
+        string text = await Ask(_references, "list_members", new()
+        {
+            ["assembly"] = _user,
+            ["type_name"] = "ExternalUser.Passing.OwnLedger",
+            ["include_inherited"] = true,
+        });
+
+        Assert.Equal(
+            "3 members of public class ExternalUser.Passing.OwnLedger : Ledger:\n" +
+            "3 methods:\n" +
+            "  public OwnLedger()\n" +
+            "  public int Log(params IEnumerable<string> lines)  [from ExternalLib.Passing.Ledger]\n" +
+            "  public int Sum(params int[] values)  [from ExternalLib.Passing.Ledger]",
+            text);
+    }
+
     // Without its library, a method is known from the call alone. A parameter the signature
     // marks as read-only is still one passed by reference: it is written ref like the others,
     // and the two overloads of Weigh stay two lines.

@@ -12,12 +12,12 @@ the Apache license terms in the same document.
 
 ## Provenance
 
-- Source URL: https://raw.githubusercontent.com/modelcontextprotocol/csharp-sdk/v1.2.0/LICENSE
-- Vendored from: `modelcontextprotocol/csharp-sdk`, tag `v1.2.0`
+- Source URL: https://raw.githubusercontent.com/modelcontextprotocol/csharp-sdk/v1.4.1/LICENSE
+- Vendored from: `modelcontextprotocol/csharp-sdk`, tag `v1.4.1`
 
 ## NOTICE file
 
-Checked at v1.2.0: upstream has no `NOTICE` file at the repo root. The
+Checked at v1.4.1: upstream has no `NOTICE` file at the repo root. The
 license-transition explanation at the top of the `LICENSE` file (the
 paragraphs before the Apache license body) is what serves as the equivalent
 attribution notice. Apache §4(d) requires NOTICE redistribution **if the

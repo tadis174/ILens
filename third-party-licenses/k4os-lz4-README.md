@@ -1,8 +1,8 @@
 # K4os.Compression.LZ4 MIT license
 
 `k4os-lz4-LICENSE` covers `K4os.Compression.LZ4`, an LZ4 implementation by Milosz
-Krajewski. Pulled in transitively via `ICSharpCode.ILSpyX` for handling
-LZ4-compressed sections in .NET assembly metadata.
+Krajewski. Pulled in transitively via `ICSharpCode.ILSpyX`, which uses it to
+open the LZ4-compressed assemblies of Xamarin apps.
 
 ## Provenance
 

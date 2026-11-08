@@ -47,7 +47,7 @@ public sealed class ILensServerFixture : IAsyncLifetime
             Command = ResolveILensExecutable(),
             Arguments = [.. AllowRoots.SelectMany(root => new[] { "--allow-root", root })],
         });
-        Client = await McpClient.CreateAsync(transport);
+        Client = await ConnectAsync(transport);
     }
 
     public async Task DisposeAsync()
@@ -57,12 +57,31 @@ public sealed class ILensServerFixture : IAsyncLifetime
     }
 
     /// <summary>
+    /// Connects a client to the ILens server that the transport starts, as every client of the
+    /// suite does. The client waits up to ten minutes for the server's answer to its first
+    /// request, where the MCP SDK waits 60 s. A server answers within 2 s of its start on a machine
+    /// under light load, but while other programs keep the CPU fully busy, starts in a full run can
+    /// take longer than 60 s, and at the SDK's limit their tests fail without being broken. A server
+    /// that exits fails its test at once, so the limit only ends one that stays alive without
+    /// answering. A run that still fails here with "Initialization timed out" had a start of over ten
+    /// minutes: a server that hangs before it answers, or a machine busier than in any run measured,
+    /// which is worth measuring before the limit is raised.
+    /// </summary>
+    public static Task<McpClient> ConnectAsync(IClientTransport transport) =>
+        McpClient.CreateAsync(transport, new McpClientOptions
+        {
+            InitializationTimeout = TimeSpan.FromMinutes(10),
+        });
+
+    /// <summary>
     /// Resolves the ILens executable to drive. <c>run-test.ps1</c> sets
     /// <c>ILENS_E2E_EXE</c>; absent that (a bare <c>dotnet test</c>), falls back to
     /// the most recent <c>ILens.exe</c> under the Core project's build output.
     /// Exposed publicly so tests that need a custom-configured second server
     /// (e.g. with <c>--max-total-size</c>) can spawn one without duplicating
-    /// this lookup logic.
+    /// this lookup logic. Such a test connects its client through
+    /// <see cref="ConnectAsync"/>, as every client of the suite does, so that
+    /// a busy machine does not fail its start.
     /// </summary>
     public static string ResolveILensExecutable()
     {

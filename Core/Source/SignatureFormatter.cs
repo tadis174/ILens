@@ -142,6 +142,37 @@ public static class SignatureFormatter
     }
 
     /// <summary>
+    /// The line a C# 14 extension block opens with, as the decompiled class writes it: its type
+    /// parameters, its receiver as a parameter and the conditions on the type parameters, such
+    /// as <c>extension&lt;T&gt;(List&lt;T&gt; list) where T : IComparable&lt;T&gt;</c>. A receiver
+    /// without a name, which a block of static members may declare, is written as its type alone,
+    /// <c>extension(CliStrings)</c>. <paramref name="marker"/> is the method of the compiler's
+    /// marker class whose one parameter is the receiver, and <paramref name="typeParameters"/>
+    /// are the block's own, as the type system's ExtensionInfo gives both.
+    /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: a condition on a block's
+    /// type parameter that names a type parameter names the one of the compiler's grouping class,
+    /// which the decompiled class writes as <c>$T0</c>, so the conditions are read through the
+    /// block's own type parameters. The case: ListMembers_ListsABlocksMembersUnderTheBlock in
+    /// ExtensionBlockTests, <c>where T : IComparable&lt;T&gt;</c>.
+    /// </remarks>
+    public static string FormatExtensionBlock(IMethod marker, IReadOnlyList<ITypeParameter> typeParameters)
+    {
+        var own = new TypeParameterSubstitution(typeParameters, Array.Empty<IType>());
+        var receiver = marker.Specialize(own).Parameters.Single();
+        var typeParams = typeParameters.Count > 0
+            ? "<" + string.Join(", ", typeParameters.Select(p => ReferenceFormatter.FormatIdentifier(p.Name))) + ">"
+            : "";
+        var parameter = string.IsNullOrEmpty(receiver.Name)
+            ? ReferenceFormatter.FormatParameterType(receiver, full: false)
+            : FormatParameter(receiver, full: false, defaults: false);
+        var conditions = ReferenceFormatter.FormatWhereClauses(typeParameters,
+            type => ReferenceFormatter.FormatTypeRef(type.AcceptVisitor(own), full: false));
+        return $"extension{typeParams}({parameter}){conditions}";
+    }
+
+    /// <summary>
     /// A type's full name as its declaration writes it: its namespace, the types enclosing it,
     /// and each one's own type parameters by name, such as
     /// <c>System.Collections.Generic.Dictionary&lt;TKey, TValue&gt;.Enumerator</c>. The type's own

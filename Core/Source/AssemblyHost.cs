@@ -107,8 +107,11 @@ public sealed class AssemblyHost : IDisposable
         IsReferenceAssembly = CarriesReferenceMark(_peFile.Metadata);
         // The resolver looks for a reference by its file name in the assembly's own directory,
         // which its constructor adds, then at the top of each allow-root in the order given, and
-        // then among the installed .NET libraries, which it asks first for a .NET Core or .NET
-        // Standard target. A mod's game and engine assemblies often sit in an allow-root of their
+        // then among the installed .NET Framework libraries and in the Global Assembly Cache. For
+        // a .NET Core or .NET Standard target it looks, between the assembly's directory and the
+        // allow-roots, in the NuGet package folders a .deps.json beside the assembly names and in
+        // the installed shared runtime; a Windows Runtime reference it looks for among the Windows
+        // metadata files alone. A mod's game and engine assemblies often sit in an allow-root of their
         // own, and without them the decompiled code has gaps and numbers where enum names belong.
         // The search does not descend into a root: a tree holding several builds of one assembly,
         // such as a game's older versions, would leave the choice to the order of the walk.
@@ -155,19 +158,54 @@ public sealed class AssemblyHost : IDisposable
     /// <summary>
     /// The error for a question that reads code, asked of a reference assembly
     /// (<see cref="IsReferenceAssembly"/>). Answered from its placeholders, such a question would
-    /// say that nothing uses, calls or creates a member, as if that were a fact about the library.
-    /// <paramref name="cannot"/> says what cannot be answered and <paramref name="instead"/> where
-    /// to ask instead. The error does not name the file, which can share its name with the
-    /// library's own build, as a publicized copy of an assembly does.
+    /// say that nothing uses, calls or creates a member, as if that were a fact about the library,
+    /// or show a placeholder as a member's code. <paramref name="cannot"/> says what cannot be
+    /// answered and <paramref name="instead"/> where to ask instead. The error does not name the
+    /// file, which can share its name with the library's own build, as a publicized copy of an
+    /// assembly does.
     /// </summary>
     public static ArgumentException ReferenceAssemblyError(string cannot, string instead) =>
         new("This assembly is a reference assembly, which holds a library's declarations without their code, " +
             $"so {cannot}; {instead}");
 
+    /// <summary>
+    /// Where to ask instead, in <see cref="ReferenceAssemblyError"/> for a question about a library's
+    /// code: the library's own build, or the tools that read declarations alone.
+    /// </summary>
+    public const string AskForCodeElsewhere =
+        "ask the build the library runs as. find_methods and list_members read declarations alone and answer here.";
+
+    /// <summary>
+    /// The settings every decompiler of the host writes with: C# 14, without primary constructors
+    /// for classes and structs and without first-class span conversions.
+    /// </summary>
+    /// <remarks>
+    /// C# 14 writes ref readonly parameters, a lambda's default values, params collections, inline
+    /// array access, extension blocks and the field keyword as their source writes them, which an
+    /// earlier version writes in the forms the compiler stores. The version is named rather than
+    /// Latest, so that a library update cannot change every decompiled answer unmeasured. Primary
+    /// constructors for classes and structs stay off, since the decompiler cannot tell one from an
+    /// ordinary constructor that assigns fields and rewrites those too, in code written before
+    /// C# 12. First-class span conversions stay off, since they write a call to AsSpan as a cast or
+    /// drop it, which hides a call the code makes from the reader and from the decompiled text that
+    /// <c>call_sites</c> counts against the IL. A call to a params array that the framework also
+    /// offers as a params span is written with its array, which names the overload the code calls.
+    /// The field keyword stays on although it writes a static auto-property with a setter and an
+    /// initializer, in a class that declares a static constructor, over its backing field: such a
+    /// property is rarer than one written with the keyword, and either way the backing field shows.
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: C# 14 is the latest
+    /// language version, SetLanguageVersion switches these features on from C# 12, 13 and 14, and
+    /// with the field keyword on, a store to a static property's backing field in a static
+    /// constructor keeps the field where it does not become an initializer
+    /// (PatternStatementTransform.BuildOutsideReferenceIndex). The cases: LanguageVersionTests, for
+    /// every feature named and the two left off; no fixture holds the field keyword's static
+    /// auto-property.
+    /// </remarks>
     private static DecompilerSettings CreateSettings() =>
-        new(ICSharpCode.Decompiler.CSharp.LanguageVersion.CSharp11_0)
+        new(ICSharpCode.Decompiler.CSharp.LanguageVersion.CSharp14_0)
         {
-            ThrowOnAssemblyResolveErrors = false
+            UsePrimaryConstructorSyntaxForNonRecordTypes = false,
+            FirstClassSpanTypes = false,
         };
 
     /// <summary>
@@ -311,8 +349,8 @@ public sealed class AssemblyHost : IDisposable
     /// leaves a type parameter the receiver does not name unbound, so a constraint naming one
     /// fails, fits a generic type asked without type arguments only where every construction
     /// of it fits, and does not convert an array to Span&lt;T&gt; or ReadOnlySpan&lt;T&gt;, which
-    /// C# 14 does for a receiver. In version 9.1 it does not convert an array to
-    /// IReadOnlyCollection&lt;T&gt; either, which SymbolResolver.FitsArray adds.
+    /// C# 14 does for a receiver: the rule does so only in a type system built with first-class
+    /// span conversions, which <see cref="CreateSettings"/> leaves off.
     /// </remarks>
     public bool FitsExtension(IType type, IMethod method)
     {
@@ -343,13 +381,98 @@ public sealed class AssemblyHost : IDisposable
     }
 
     /// <summary>
-    /// Decompile a type to full C# source. Thread-safe.
+    /// Decompile a top-level type to full C# source, with its using lines and namespace.
+    /// Thread-safe. A nested type goes to <see cref="DecompileNestedType"/>, since ILSpy's
+    /// DecompileType decompiles the outermost type of the name it is given. A type the decompiler
+    /// writes no declaration for comes as <see cref="DecompileTopLevelType"/> says, under a
+    /// comment that names it, since that declaration stands without its namespace.
     /// </summary>
     public string DecompileType(ITypeDefinition type)
     {
         lock (_decompilerLock)
         {
-            return _decompiler.DecompileTypeAsString(type.FullTypeName);
+            var (tree, alone) = DecompileTopLevelType(_decompiler, type);
+            var code = Write(tree);
+            return alone ? $"// {ReferenceFormatter.FormatTypeName(type)}\n{code}" : code;
+        }
+    }
+
+    /// <summary>
+    /// A writer for decompiled or disassembled code that ends each line with a line feed alone,
+    /// as ILens writes its own lines, where a StringWriter's own line end is the platform's, a
+    /// carriage return and a line feed on Windows. Every writer of code that spans lines goes
+    /// through it, so that no answer mixes two line ends; code written as one line, such as a
+    /// call's argument or a constant, comes from AstNode.ToString and folds its line ends.
+    /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: TextWriterTokenWriter and
+    /// PlainTextOutput end a line through the writer's WriteLine, so its NewLine decides, while a
+    /// comment's own text is written as it stands. DecompileAsString makes a StringWriter of its
+    /// own, so it is not used. The case: LineEndTests, and the raw comparison of 3,155 answers on
+    /// 2026-11-08 that found no carriage return left.
+    /// </remarks>
+    internal static StringWriter CodeWriter() => new() { NewLine = "\n" };
+
+    /// <summary>A tree written as C#, through <see cref="CodeWriter"/>.</summary>
+    private string Write(SyntaxTree tree)
+    {
+        var writer = CodeWriter();
+        tree.AcceptVisitor(new CSharpOutputVisitor(writer, _settings.CSharpFormattingOptions));
+        return writer.ToString();
+    }
+
+    /// <summary>
+    /// The tree of a top-level type: with its namespace through ILSpy's DecompileType, or, where
+    /// that writes no declaration at all, the type alone through its handle (<c>Alone</c> true).
+    /// The decompiler writes none for the class that holds the compiler's helpers,
+    /// <c>&lt;PrivateImplementationDetails&gt;</c>, for an anonymous type, and for a
+    /// <c>&lt;Module&gt;</c> without members, which then reads as an empty class rather than as
+    /// an empty answer.
+    /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: DoDecompileTypes, behind
+    /// DecompileType, leaves out a type MemberIsHidden hides and a <c>&lt;Module&gt;</c> without
+    /// members, and Decompile with the type's handle writes it through DoDecompile without that
+    /// check and without its namespace. DoDecompile still leaves out the members MemberIsHidden
+    /// hides, among them the fields of <c>&lt;PrivateImplementationDetails&gt;</c> named
+    /// <c>__StaticArrayInit</c> or <c>$$method</c>, or typed as a top-level
+    /// <c>__StaticArrayInit</c> struct, which older compilers write; Roslyn's hash-named fields of
+    /// a nested struct's type stay. The cases: AHiddenTopLevelType_IsDecompiledAsTheCompilerGeneratedIt
+    /// and ATopLevelDelegate_ComesWithItsNamespace in NestedTypeTests, and
+    /// AHiddenTopLevelType_IsSearched in SearchCodeTests.
+    /// </remarks>
+    internal static (SyntaxTree Tree, bool Alone) DecompileTopLevelType(CSharpDecompiler decompiler, ITypeDefinition type)
+    {
+        var tree = decompiler.DecompileType(type.FullTypeName);
+        // A delegate is a DelegateDeclaration, no TypeDeclaration; both are entity declarations.
+        if (tree.Descendants.OfType<EntityDeclaration>().Any())
+            return (tree, false);
+        return (decompiler.Decompile(type.MetadataToken), true);
+    }
+
+    /// <summary>
+    /// Decompile a nested type to C# on its own, with the using lines it needs and without the
+    /// types around it. A nested type the decompiler writes into a method of the type around it,
+    /// such as a lambda's class or an iterator's state machine, comes out as the compiler
+    /// generated it. Thread-safe.
+    /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: DecompileType
+    /// decompiles the outermost type of the name it is given, through
+    /// DoDecompileTypes, which leaves out a type MemberIsHidden hides; Decompile with a type's
+    /// handle decompiles that type alone through DoDecompile, without that check. Alone, the
+    /// declaration lacks the new modifier that SetNewModifier gives a nested type only from
+    /// DoDecompile of its declaring type, and a name that is ambiguous among the outer type's
+    /// using lines is written short. The cases: ANestedType_IsDecompiledOnItsOwn and
+    /// ATypeTheDecompilerFoldsIntoAMethod_IsDecompiledAsTheCompilerGeneratedIt in NestedTypeTests,
+    /// and for the new modifier MonoMod.Core.Interop.CoreCLR.V100.ICorJitInfoVtable in Harmony
+    /// 2.4.3.
+    /// </remarks>
+    public string DecompileNestedType(ITypeDefinition type)
+    {
+        lock (_decompilerLock)
+        {
+            return Write(_decompiler.Decompile(type.MetadataToken));
         }
     }
 
@@ -357,47 +480,149 @@ public sealed class AssemblyHost : IDisposable
     /// Decompile a single method to C# source. Thread-safe.
     /// </summary>
     /// <remarks>
-    /// An accessor decompiled on its own comes back as a bare <see cref="Accessor"/> node.
-    /// ILSpy writes an accessor's keyword (get, set, init, add, remove) from the role the node
-    /// holds in its property or event, not from the keyword token it carries, so a bare one
-    /// would print as its modifiers and body alone. The node is re-attached under the role its
-    /// token names, which the output visitor reads.
+    /// An accessor is written as its part of the declaration of the property, indexer or event
+    /// that owns it, decompiled whole, so that it reads as that declaration reads: with the
+    /// <c>field</c> keyword, or as <c>get;</c> of an auto-property, rather than with the backing
+    /// field's name, which no C# can write. <see cref="BareAccessorWriter"/> writes that
+    /// declaration as the accessor alone. Where the declaration holds no accessor of that kind,
+    /// as a field-like event or a property written with <c>=&gt;</c> does, the accessor is
+    /// decompiled on its own: it comes back as a bare <see cref="Accessor"/> node, which is put
+    /// into the slot its kind names, of a property or event declaration written the same way.
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: the output visitor writes
+    /// an accessor's keyword (get, set, init, add, remove) from the slot the node holds in its
+    /// property or event, not from its kind, so a bare one prints as its modifiers and body alone;
+    /// the transforms that write <c>field</c> and an auto-property run on a whole property
+    /// declaration, which an accessor decompiled on its own never reaches; the visitor writes an
+    /// accessor without a body as <c>get; </c>, with a space and no line end, for the accessor it
+    /// expects to follow; it writes a struct property's <c>readonly</c> on the declaration
+    /// that holds both accessors, not on the getter; and it writes <c>extern</c> on a property or
+    /// event only where none of its accessors has a body, and on a method decompiled alone
+    /// where that method has none, neither of them abstract or an interface's. The cases:
+    /// decompile of get_ThrowOnAssemblyResolveErrors in DecompilerAssemblyTests, and
+    /// AccessorTests, with ExternAccessorAssembly for <c>extern</c>.
     /// </remarks>
     public string DecompileMethod(IMethod method)
     {
         lock (_decompilerLock)
         {
-            var tree = _decompiler.Decompile(method.MetadataToken);
-            foreach (var accessor in tree.Descendants.OfType<Accessor>().ToList())
+            if (OwnersAccessor(method) is var (ownerTree, owner, part))
             {
-                if (AccessorRoleOf(accessor.Keyword.Role) is not { } role || accessor.Role == role)
-                    continue;
-                var parent = accessor.Parent;
-                var next = accessor.NextSibling;
-                accessor.Remove();
-                if (next is null)
-                    parent.AddChild(accessor, role);
-                else
-                    parent.InsertChildBefore(next, accessor, role);
+                var ownerWriter = CodeWriter();
+                ownerTree.AcceptVisitor(new BareAccessorWriter(ownerWriter, _settings.CSharpFormattingOptions,
+                    new Dictionary<EntityDeclaration, Accessor> { [owner] = part }));
+                // An auto-property's accessor, get; or set;, is written for a line that goes on
+                // with the next accessor: with a space after it and no line end.
+                var text = ownerWriter.ToString();
+                return text.EndsWith('\n') ? text : text.TrimEnd(' ') + "\n";
             }
 
-            var writer = new StringWriter();
-            tree.AcceptVisitor(new CSharpOutputVisitor(writer, _settings.CSharpFormattingOptions));
+            var tree = _decompiler.Decompile(method.MetadataToken);
+            var holders = new Dictionary<EntityDeclaration, Accessor>();
+            foreach (var accessor in tree.Members.OfType<Accessor>().ToList())
+            {
+                EntityDeclaration holder = accessor.Kind switch
+                {
+                    AccessorKind.Getter or AccessorKind.Setter or AccessorKind.Init => new PropertyDeclaration(),
+                    AccessorKind.Adder or AccessorKind.Remover => new CustomEventDeclaration(),
+                    _ => null,
+                };
+                if (holder is null)
+                    continue;
+                accessor.ReplaceWith(holder);
+                switch (holder)
+                {
+                    case PropertyDeclaration property when accessor.Kind == AccessorKind.Getter:
+                        property.Getter = accessor;
+                        break;
+                    case PropertyDeclaration property:
+                        property.Setter = accessor;
+                        break;
+                    case CustomEventDeclaration customEvent when accessor.Kind == AccessorKind.Adder:
+                        customEvent.AddAccessor = accessor;
+                        break;
+                    case CustomEventDeclaration customEvent:
+                        customEvent.RemoveAccessor = accessor;
+                        break;
+                }
+                holders.Add(holder, accessor);
+            }
+
+            var writer = CodeWriter();
+            tree.AcceptVisitor(new BareAccessorWriter(writer, _settings.CSharpFormattingOptions, holders));
             return writer.ToString();
         }
     }
 
-    private static Role<Accessor> AccessorRoleOf(Role keywordRole)
+    /// <summary>
+    /// The declaration of the property, indexer or event that owns <paramref name="method"/>,
+    /// decompiled whole, and the accessor of it that the method is; null where the method is no
+    /// accessor or the declaration holds no accessor of its kind.
+    /// </summary>
+    private (SyntaxTree Tree, EntityDeclaration Owner, Accessor Part)? OwnersAccessor(IMethod method)
     {
-        if (keywordRole == PropertyDeclaration.GetKeywordRole)
-            return PropertyDeclaration.GetterRole;
-        if (keywordRole == PropertyDeclaration.SetKeywordRole || keywordRole == PropertyDeclaration.InitKeywordRole)
-            return PropertyDeclaration.SetterRole;
-        if (keywordRole == CustomEventDeclaration.AddKeywordRole)
-            return CustomEventDeclaration.AddAccessorRole;
-        if (keywordRole == CustomEventDeclaration.RemoveKeywordRole)
-            return CustomEventDeclaration.RemoveAccessorRole;
+        if (method.AccessorOwner is not (IProperty or IEvent) || method.AccessorOwner.MetadataToken.IsNil)
+            return null;
+        var tree = _decompiler.Decompile(method.AccessorOwner.MetadataToken);
+        foreach (var declaration in tree.Descendants.OfType<EntityDeclaration>())
+        {
+            var part = (declaration, method.AccessorKind) switch
+            {
+                (PropertyDeclaration property, System.Reflection.MethodSemanticsAttributes.Getter) => property.Getter,
+                (PropertyDeclaration property, System.Reflection.MethodSemanticsAttributes.Setter) => property.Setter,
+                (IndexerDeclaration indexer, System.Reflection.MethodSemanticsAttributes.Getter) => indexer.Getter,
+                (IndexerDeclaration indexer, System.Reflection.MethodSemanticsAttributes.Setter) => indexer.Setter,
+                (CustomEventDeclaration customEvent, System.Reflection.MethodSemanticsAttributes.Adder) => customEvent.AddAccessor,
+                (CustomEventDeclaration customEvent, System.Reflection.MethodSemanticsAttributes.Remover) => customEvent.RemoveAccessor,
+                _ => null,
+            };
+            if (part is null)
+                continue;
+            // A readonly struct member's readonly stands on the declaration that holds both
+            // accessors; the accessor written alone carries it.
+            if (declaration.Modifiers.HasFlag(Modifiers.Readonly))
+                part.Modifiers |= Modifiers.Readonly;
+            // An accessor without a body, such as an engine's internal call, is extern, as a method
+            // decompiled alone is; ILSpy writes extern on the declaration only where no accessor
+            // has a body.
+            if (!method.HasBody && !method.IsAbstract && method.DeclaringType.Kind != TypeKind.Interface)
+                part.Modifiers |= Modifiers.Extern;
+            return (tree, declaration, part);
+        }
         return null;
+    }
+
+    /// <summary>
+    /// Writes a tree as <see cref="CSharpOutputVisitor"/> does, except each declaration of
+    /// <paramref name="holders"/>, which is written as the one accessor it maps to
+    /// (<see cref="DecompileMethod"/>).
+    /// </summary>
+    private sealed class BareAccessorWriter(
+        TextWriter writer, CSharpFormattingOptions options, IReadOnlyDictionary<EntityDeclaration, Accessor> holders)
+        : CSharpOutputVisitor(writer, options)
+    {
+        public override void VisitPropertyDeclaration(PropertyDeclaration declaration)
+        {
+            if (holders.TryGetValue(declaration, out var accessor))
+                accessor.AcceptVisitor(this);
+            else
+                base.VisitPropertyDeclaration(declaration);
+        }
+
+        public override void VisitIndexerDeclaration(IndexerDeclaration declaration)
+        {
+            if (holders.TryGetValue(declaration, out var accessor))
+                accessor.AcceptVisitor(this);
+            else
+                base.VisitIndexerDeclaration(declaration);
+        }
+
+        public override void VisitCustomEventDeclaration(CustomEventDeclaration declaration)
+        {
+            if (holders.TryGetValue(declaration, out var accessor))
+                accessor.AcceptVisitor(this);
+            else
+                base.VisitCustomEventDeclaration(declaration);
+        }
     }
 
     /// <summary>
@@ -410,7 +635,7 @@ public sealed class AssemblyHost : IDisposable
     {
         lock (_decompilerLock)
         {
-            return _decompiler.DecompileAsString(property.MetadataToken);
+            return Write(_decompiler.Decompile(property.MetadataToken));
         }
     }
 
@@ -423,7 +648,7 @@ public sealed class AssemblyHost : IDisposable
     {
         lock (_decompilerLock)
         {
-            return _decompiler.DecompileAsString(@event.MetadataToken);
+            return Write(_decompiler.Decompile(@event.MetadataToken));
         }
     }
 
@@ -463,11 +688,7 @@ public sealed class AssemblyHost : IDisposable
                 .Concat(type.DeclaredMethods().Where(m => m.IsConstructor && m.IsStatic == field.IsStatic).Select(m => m.MetadataToken))
                 .ToList();
             _keepOneField.Field = field.MetadataToken;
-            var tree = _fieldDecompiler.Decompile(handles);
-
-            var writer = new StringWriter();
-            tree.AcceptVisitor(new CSharpOutputVisitor(writer, _settings.CSharpFormattingOptions));
-            return writer.ToString();
+            return Write(_fieldDecompiler.Decompile(handles));
         }
     }
 
@@ -497,13 +718,32 @@ public sealed class AssemblyHost : IDisposable
     /// <remarks>
     /// A call site search maps each argument to its parameter by position. The host's own
     /// decompiler renders calls for reading: it may name and reorder arguments, and it writes
-    /// extension calls. This second decompiler turns named arguments off and leaves out the step
-    /// that writes extension calls. It shares the first one's type system, which spares a second
-    /// load of the assembly. ILSpy reads the setting <c>ExtensionMethods</c> only when it builds a
-    /// type system, so the setting alone does not stop that step. It still keeps a foreach from
-    /// hiding a call to an extension <c>GetEnumerator</c>. Trailing optional arguments equal to
-    /// their default are still omitted: ILSpy drops them even with <c>OptionalArguments</c> off,
-    /// once a required argument precedes them, and only when the value equals the default exactly.
+    /// extension calls. This second decompiler turns named arguments off and has a type system of
+    /// its own, built with <c>ExtensionMethods</c> off over the files the host's own found
+    /// (<see cref="LoadedReferences"/>): ILSpy writes a call as an extension call where the type
+    /// system marks the method as an extension method, and the type system reads the setting only
+    /// when it is built. The setting itself keeps a foreach from hiding a call to an extension
+    /// <c>GetEnumerator</c>. <c>OptionalArguments</c> stays on, so a trailing optional argument
+    /// equal to its parameter's default is left out, as in the code the host's own decompiler
+    /// writes, and <see cref="CallSiteFinder"/> gives a parameter left out its default.
+    /// <c>ParamsCollections</c> is off as well, so that the type system reads params on an array
+    /// alone and the search takes the collection the compiler builds for a params collection as
+    /// one argument: with it on, the call to an indexer over a params span is reported as not shown.
+    /// The case: CallSites_OfAParameterThatTakesAnyNumberOfArguments_ListsEveryCall in
+    /// ParamsCollectionTests. <c>InlineArrays</c> is off too, so that an inline array's element and
+    /// span stay the calls to the compiler's helpers that the IL makes: with it on, the search
+    /// counts such a call in the IL and not in the C#, and reports its caller as not shown. The
+    /// case: CallSites_OfTheCompilersInlineArrayHelper_ListsEveryCall in LanguageVersionTests.
+    /// C# 14's extension members stay on, since a call to one is written as a static call all the
+    /// same.
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: the call builder writes an
+    /// extension call where the method is an extension method in the type system it reads
+    /// (<c>CallBuilder.TryUseExtensionMethodSyntax</c>). The case:
+    /// FindCallSites_OnAnExtensionMethod_WritesEachCallInItsStaticForm in CallSiteTests.
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: with <c>ExtensionMethods</c>
+    /// off, a call to a C# 14 extension member, static or instance, is written as a static call.
+    /// The case: the callers of get_ForwardingFunction(Option) of
+    /// Microsoft.DotNet.Cli.CommandLine.ForwardedOptionExtensions in the .NET 10 SDK.
     /// </remarks>
     public ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree DecompileWithPositionalArguments(
         IEntity entity)
@@ -516,15 +756,10 @@ public sealed class AssemblyHost : IDisposable
                 settings.NamedArguments = false;
                 settings.NonTrailingNamedArguments = false;
                 settings.ExtensionMethods = false;
-                var decompiler = new CSharpDecompiler((DecompilerTypeSystem)_decompiler.TypeSystem, settings);
-                var extensionCallSteps = decompiler.AstTransforms.Where(transform => transform is IntroduceExtensionMethods).ToList();
-                if (extensionCallSteps.Count == 0)
-                    throw new InvalidOperationException(
-                        "ILSpy no longer writes extension calls in a transform of its own, so the arguments " +
-                        "of a call to an extension method cannot be read in parameter order.");
-                foreach (var step in extensionCallSteps)
-                    decompiler.AstTransforms.Remove(step);
-                _positionalDecompiler = decompiler;
+                settings.ParamsCollections = false;
+                settings.InlineArrays = false;
+                var typeSystem = new DecompilerTypeSystem(_peFile, new LoadedReferences(_decompiler.TypeSystem), settings);
+                _positionalDecompiler = new CSharpDecompiler(typeSystem, settings);
             }
             return _positionalDecompiler.Decompile(entity.MetadataToken);
         }
@@ -541,14 +776,17 @@ public sealed class AssemblyHost : IDisposable
     /// game assembly of 16 MB), which on the host's own would put the process over the memory
     /// budget and have the registry close this host with everything it holds. The pass reads the
     /// assembly through the image the host has loaded and opens the references anew, which it
-    /// closes when it ends.
+    /// closes when it ends. It writes with the host's settings, so that a line it finds is a line
+    /// of decompile's answer, in a C# 14 extension block as well, whose members own their lines
+    /// through the methods the compiler made of them (<see cref="CodeTextPass"/>).
     /// </remarks>
     public void DecompileForSearch(
         IReadOnlyList<TypeDefinitionHandle> types, CodeTextStore.Search texts, CodeTextPass.Limit limit)
     {
         using var references = new ReferenceResolver(_referenceSearch, _guard);
-        var typeSystem = new DecompilerTypeSystem(_peFile, references, _settings);
-        CodeTextPass.Run(typeSystem, _settings, types, texts, limit);
+        var settings = CreateSettings();
+        var typeSystem = new DecompilerTypeSystem(_peFile, references, settings);
+        CodeTextPass.Run(typeSystem, settings, types, texts, limit);
     }
 
     /// <summary>
@@ -1106,7 +1344,7 @@ public sealed class AssemblyHost : IDisposable
 
         lock (_decompilerLock)
         {
-            var output = new PlainTextOutput();
+            var output = new PlainTextOutput(CodeWriter());
             var disasm = new MethodBodyDisassembler(output, CancellationToken.None)
             {
                 DetectControlStructure = false
@@ -1206,9 +1444,8 @@ public sealed class AssemblyHost : IDisposable
     /// These are the rules of ILSpy's <c>CSharpDecompiler.GetCodeMappingInfo</c>, which ILens
     /// does not ask, since its <c>ReadCodeMappingInfo</c> loses or misplaces code wherever an
     /// instruction names a generated method through a reference and not through its
-    /// definition, as it does in a generic type and in a generic method (read in
-    /// ICSharpCode.Decompiler 9.1.0.7988 and in 11.1.0.9782). A call is followed only to a
-    /// method definition, so not to a local function of a generic type. An address is not
+    /// definition, as it does in a generic type and in a generic method. A call is followed only
+    /// to a method definition, so not to a local function of a generic type. An address is not
     /// followed when it names a method specification, as for a lambda that is a generic method
     /// itself. An address taken through a member reference is followed only into a class nested
     /// in the type of the code being read, so not from an iterator's or async method's class to
@@ -1217,6 +1454,8 @@ public sealed class AssemblyHost : IDisposable
     /// <c>&lt;&gt;c</c> gets all of that class's lambdas. With an ILSpy whose map has none of
     /// these faults, <see cref="AttributeToSource"/> and <see cref="FindUsedSymbols"/> can take
     /// a method's parts from that map and this reading can go.
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: <c>ReadCodeMappingInfo</c>
+    /// reads as it did in 9.1.0.7988, where the faults were measured. The cases: GenericShapeTests.
     /// </para>
     /// <para>
     /// A method the compiler added only to pass a call on (see <see cref="Proxies"/>) is no
@@ -1598,14 +1837,16 @@ public sealed class AssemblyHost : IDisposable
     /// among what that member uses.
     /// </para>
     /// <para>
-    /// A method is a proxy by the test of ILSpy's <c>ProxyCallReplacer</c> (read in
-    /// ICSharpCode.Decompiler 9.1.0.7988), so that what is counted here is what the decompiled
-    /// code shows: an instance method the compiler generated whose body passes <c>this</c> and
-    /// its parameters, in order, to one non-virtual call of an instance method that is no
-    /// constructor and takes as many parameters, and a call of it counts when the calling code
-    /// lies in the proxy's class or in a class nested in it. The test goes by this shape, not
-    /// by the method's name. Where it and ILSpy's ever disagree, <c>call_sites</c> shows it:
-    /// the calls counted and the calls found in the decompiled code then differ.
+    /// A method is a proxy by the test of ILSpy's <c>ProxyCallReplacer</c>, so that what is
+    /// counted here is what the decompiled code shows: an instance method the compiler generated
+    /// whose body passes <c>this</c> and its parameters, in order, to one non-virtual call of an
+    /// instance method that is no constructor and takes as many parameters, and a call of it
+    /// counts when the calling code lies in the proxy's class or in a class nested in it. The
+    /// test goes by this shape, not by the method's name. Where it and ILSpy's ever disagree,
+    /// <c>call_sites</c> shows it: the calls counted and the calls found in the decompiled code
+    /// then differ.
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: <c>ProxyCallReplacer</c>
+    /// tests a method as described. The cases: BaseCallTests.
     /// </para>
     /// </remarks>
     private Dictionary<MethodDefinitionHandle, Proxy> Proxies()
@@ -2140,11 +2381,12 @@ public sealed class AssemblyHost : IDisposable
     }
 
     /// <summary>
-    /// Release every file this host opened: each assembly in ILSpyX's list, which holds the
-    /// inspected one and the references ILSpyX's analyzers loaded, each read whole into memory;
-    /// the decompiler's own copy of the inspected assembly; and each referenced assembly the
-    /// decompiler resolved. Called by <see cref="AssemblyHostRegistry"/> once it closes the host,
-    /// which it does only while no call holds it. Idempotent — a second Dispose call is a no-op.
+    /// Release every file this host opened: each assembly in ILSpyX's list, read whole into
+    /// memory, which is the inspected one alone, since the ILSpyX analyzers ILens runs look a
+    /// reference up in the list without loading it; the decompiler's own copy of the inspected
+    /// assembly; and each referenced assembly the decompiler resolved. Called by
+    /// <see cref="AssemblyHostRegistry"/> once it closes the host, which it does only while no
+    /// call holds it. Idempotent — a second Dispose call is a no-op.
     /// Calling tool methods on a disposed host is a programming error.
     /// </summary>
     public void Dispose()
@@ -2164,8 +2406,9 @@ public sealed class AssemblyHost : IDisposable
     /// Resolves the assembly's references for the decompiler where the inner resolver finds them,
     /// opening a file only when <see cref="PathGuard.AdmitsReference"/> admits it, and records
     /// every file it opens, so that <see cref="Dispose"/> can close them. The decompiler resolves
-    /// the assembly's references, transitively, when it is built, and maps each file it finds,
-    /// and nothing else closes them.
+    /// the assembly's references when it is built, with the assemblies that the type forwarders
+    /// of each file it finds point to, but not those files' own references, and maps each file
+    /// it finds, and nothing else closes them.
     /// </summary>
     private sealed class ReferenceResolver(UniversalAssemblyResolver inner, PathGuard guard)
         : IAssemblyResolver, IDisposable
@@ -2187,6 +2430,8 @@ public sealed class AssemblyHost : IDisposable
 
         public Task<MetadataFile> ResolveModuleAsync(MetadataFile mainModule, string moduleName) =>
             Task.Run(() => ResolveModule(mainModule, moduleName));
+
+        public IDisposable BeginSnapshot() => inner.BeginSnapshot();
 
         /// <summary>
         /// The file <paramref name="find"/> names, opened by <paramref name="open"/> when
@@ -2258,5 +2503,8 @@ public sealed class AssemblyHost : IDisposable
 
         public Task<MetadataFile> ResolveModuleAsync(MetadataFile mainModule, string moduleName) =>
             Task.FromResult(ResolveModule(mainModule, moduleName));
+
+        /// <summary>Null: the resolver reads no directory, so it has nothing to hold.</summary>
+        public IDisposable BeginSnapshot() => null;
     }
 }
