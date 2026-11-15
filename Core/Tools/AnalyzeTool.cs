@@ -109,8 +109,8 @@ public static class AnalyzeTool
             }
             var found = resolver.FindExtensionThroughArray(array, member_name, hint, methodsOnly);
             if (found.Extension is { } throughArray)
-                return AnalyzeExtension(host, array.Display, throughArray, kind, parameter_name, non_default_only,
-                    include_compiler_generated, limit);
+                return WithBodiesNotRead(AnalyzeExtension(host, array.Display, throughArray, kind, parameter_name,
+                    non_default_only, include_compiler_generated, limit));
             if (found.MemberOwner is { } owner)
                 return Analyze(registry, assembly, owner, kind, member_name, parameter_count, parameter_types,
                     return_type, parameter_name, non_default_only, include_compiler_generated, limit);
@@ -125,9 +125,9 @@ public static class AnalyzeTool
             // type is known from this assembly's references to it.
             if (!string.IsNullOrEmpty(member_name)
                 && resolver.FindExtensionThrough(external, member_name, hint, methodsOnly) is { } extension)
-                return AnalyzeExtension(host, external.Display, extension, kind, parameter_name, non_default_only,
-                    include_compiler_generated, limit);
-            return AnalyzeExternal(host, external, kind, member_name, hint, include_compiler_generated, limit);
+                return WithBodiesNotRead(AnalyzeExtension(host, external.Display, extension, kind, parameter_name,
+                    non_default_only, include_compiler_generated, limit));
+            return WithBodiesNotRead(AnalyzeExternal(host, external, kind, member_name, hint, include_compiler_generated, limit));
         }
 
         // call_sites covers every overload of the name unless a hint selects one, so it resolves
@@ -136,7 +136,7 @@ public static class AnalyzeTool
         {
             if (string.IsNullOrEmpty(member_name))
                 ValidateKind(kind, SymbolCategory.Type);
-            return CallSiteReport.Format(host, type, member_name, hint, parameter_name, non_default_only, limit);
+            return WithBodiesNotRead(CallSiteReport.Format(host, type, member_name, hint, parameter_name, non_default_only, limit));
         }
 
         // Default to type-level analysis; member resolution overrides if member_name is set.
@@ -157,8 +157,16 @@ public static class AnalyzeTool
         var notChecked = symbol is IMethod foundMethod && resolver.ExtensionNotChecked(type, foundMethod) is { } line
             ? "\n" + line
             : "";
-        return Answer(host, type, symbol, category, originSuffix, member => resolver.Namesakes(type, member),
-            kind, include_compiler_generated, limit) + notChecked;
+        return WithBodiesNotRead(Answer(host, type, symbol, category, originSuffix, member => resolver.Namesakes(type, member),
+            kind, include_compiler_generated, limit) + notChecked);
+
+        // An answer that read the code of every method of the assembly ends with the line naming
+        // those whose code breaks off, since it read nothing past the break. uses reads the code
+        // of the method's own parts and names those in Answer.
+        string WithBodiesNotRead(string answer) =>
+            AnalysisDispatch.ReadsCode(kind) && kind != AnalysisKind.Uses && host.NotCheckedBrokenBodies() is { } notRead
+                ? answer + "\n" + notRead
+                : answer;
     }
 
     /// <summary>
@@ -276,9 +284,9 @@ public static class AnalyzeTool
             results = host.FindImplementingTypes(type);
         }
         // Both interface questions are answered from the decompiler's type system, which knows
-        // the interfaces and the base classes of other assemblies. A base type it could not
-        // read may declare more, which a list does not show, so the answer says so whatever
-        // it found.
+        // the interfaces and the base classes of other assemblies. A type it could not read may
+        // declare more, which a list does not show, so the answer says so whatever it found.
+        // For implements, such a type can also be a base type of a class below the member's class.
         else if (kind is AnalysisKind.Implements or AnalysisKind.ImplementedBy)
         {
             (bindings, var unread) = kind == AnalysisKind.Implements
@@ -318,12 +326,20 @@ public static class AnalyzeTool
                 $"Not checked: whether {display} is an attribute; its base class {uncheckedBase.TypeName} " +
                 $"was not read, since {uncheckedBase.Reason}";
 
+        // uses reads the code of the method's own parts, and of each accessor's for a property,
+        // and names those whose code breaks off, since it read nothing past the break.
+        IEnumerable<ISymbol> read = route is null ? [symbol] : route.Steps.Select(step => step.Symbol);
+        var bodiesNotRead = kind == AnalysisKind.Uses
+            ? host.NotCheckedBrokenBodies(read.OfType<IMethod>().SelectMany(host.BodiesReadForUses))
+            : null;
+
         var subject = $"{display}{originSuffix}{viaSuffix}";
         return (bindings is null
                 ? FormatAnswer(kind, subject, results, include_compiler_generated, limit)
                 : FormatBindings(kind, subject, bindings, include_compiler_generated, limit)) +
             string.Concat(reachedThrough.Select(line => "\n" + line)) +
-            (notChecked is null ? "" : "\n" + notChecked);
+            (notChecked is null ? "" : "\n" + notChecked) +
+            (bodiesNotRead is null ? "" : "\n" + bodiesNotRead);
     }
 
     /// <summary>
@@ -525,15 +541,17 @@ public static class AnalyzeTool
         }
 
         /// <summary>
-        /// The definition a symbol stands for, as its file and row, or null for one without a
-        /// row. The printed name does not serve: inside a generic class the code names the
-        /// class's own member on the constructed type, <c>Box&lt;T&gt;.set_Value(T)</c>, which
-        /// prints unlike the definition, <c>Box&lt;&gt;.set_Value(T)</c>. A member of another
-        /// assembly can have the same row number, so the file belongs to the comparison.
+        /// The definition a symbol stands for, as its file's path and its row, or null for one
+        /// without a row. The printed name does not serve: inside a generic class the code names
+        /// the class's own member on the constructed type, <c>Box&lt;T&gt;.set_Value(T)</c>,
+        /// which prints unlike the definition, <c>Box&lt;&gt;.set_Value(T)</c>. A member of
+        /// another assembly can have the same row number, so the file belongs to the comparison,
+        /// by its path, since the host's type system and the decompiler's, in which
+        /// <c>uses</c> scans, read the assembly through objects of their own.
         /// </summary>
-        private static (MetadataFile File, EntityHandle Row)? DefinitionOf(ISymbol symbol) =>
+        private static (string File, EntityHandle Row)? DefinitionOf(ISymbol symbol) =>
             symbol is IEntity { MetadataToken.IsNil: false, ParentModule.MetadataFile: { } file } entity
-                ? (file, entity.MetadataToken)
+                ? (file.FileName, entity.MetadataToken)
                 : null;
     }
 

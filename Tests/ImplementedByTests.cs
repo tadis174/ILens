@@ -250,6 +250,84 @@ public sealed class ImplementedByTests
         Assert.Equal(expected, await Analyze(_shared.Client, _interfaceShapesPath, typeName, memberName, kind));
     }
 
+    // The InterfaceShapes fixture's IStencil declares members no class can implement: a static
+    // property and method that are neither abstract nor virtual, a sealed method, property and
+    // event and a private method. Stencil has the interface and declares a public member of each
+    // of those names, and Tracer has it below Outline, which declares a public Sides; the runtime's
+    // interface maps leave each of those members out, so nothing implements them. Area, Trace,
+    // Guard, Scale and Changed, which are abstract or virtual, Guard although it is protected
+    // and Scale, which is static, by its modifier, are the controls.
+    [Theory]
+    [InlineData("InterfaceShapes.IStencil", "Count", "implemented_by",
+        "No implementations of InterfaceShapes.IStencil.Count [declared]")]
+    [InlineData("InterfaceShapes.IStencil", "Reset", "implemented_by",
+        "No implementations of InterfaceShapes.IStencil.Reset() [declared]")]
+    [InlineData("InterfaceShapes.IStencil", "Sides", "implemented_by",
+        "No implementations of InterfaceShapes.IStencil.Sides() [declared]")]
+    [InlineData("InterfaceShapes.IStencil", "get_Corners", "implemented_by",
+        "No implementations of InterfaceShapes.IStencil.get_Corners() [declared]")]
+    [InlineData("InterfaceShapes.IStencil", "Hidden", "implemented_by",
+        "No implementations of InterfaceShapes.IStencil.Hidden() [declared]")]
+    [InlineData("InterfaceShapes.Stencil", "Count", "implements",
+        "No interface members implemented by InterfaceShapes.Stencil.Count [declared]")]
+    [InlineData("InterfaceShapes.Stencil", "Corners", "implements",
+        "No interface members implemented by InterfaceShapes.Stencil.Corners [declared]")]
+    [InlineData("InterfaceShapes.Outline", "Sides", "implements",
+        "No interface members implemented by InterfaceShapes.Outline.Sides() [declared]")]
+    [InlineData("InterfaceShapes.Stencil", "Sides", "implements",
+        "No interface members implemented by InterfaceShapes.Stencil.Sides() [declared]")]
+    [InlineData("InterfaceShapes.Stencil", "Reset", "implements",
+        "No interface members implemented by InterfaceShapes.Stencil.Reset() [declared]")]
+    [InlineData("InterfaceShapes.IStencil", "Moved", "implemented_by",
+        "No implementations of InterfaceShapes.IStencil.Moved [declared]")]
+    [InlineData("InterfaceShapes.Stencil", "Moved", "implements",
+        "No interface members implemented by InterfaceShapes.Stencil.Moved [declared]")]
+    [InlineData("InterfaceShapes.Stencil", "Sides", "used_by",
+        "No users of InterfaceShapes.Stencil.Sides() [declared]")]
+    [InlineData("InterfaceShapes.IStencil", "Area", "implemented_by",
+        "2 implementations of InterfaceShapes.IStencil.Area() [declared]:\n" +
+        "InterfaceShapes.Stencil.Area()\nInterfaceShapes.Tracer.Area()")]
+    [InlineData("InterfaceShapes.IStencil", "Guard", "implemented_by",
+        "1 implementation of InterfaceShapes.IStencil.Guard() [declared]:\nInterfaceShapes.Stencil.Guard()")]
+    [InlineData("InterfaceShapes.Stencil", "Trace", "implements",
+        "1 interface member implemented by InterfaceShapes.Stencil.Trace() [declared]:\nInterfaceShapes.IStencil.Trace()")]
+    [InlineData("InterfaceShapes.IStencil", "Scale", "implemented_by",
+        "1 implementation of InterfaceShapes.IStencil.Scale() [declared]:\nInterfaceShapes.Stencil.Scale()")]
+    [InlineData("InterfaceShapes.IStencil", "Changed", "implemented_by",
+        "1 implementation of InterfaceShapes.IStencil.Changed [declared]:\nInterfaceShapes.Stencil.Changed")]
+    [InlineData("InterfaceShapes.Stencil", "Changed", "implements",
+        "1 interface member implemented by InterfaceShapes.Stencil.Changed [declared]:\nInterfaceShapes.IStencil.Changed")]
+    public async Task AnInterfaceMemberNeitherAbstractNorVirtual_IsImplementedByNothing(
+        string typeName, string memberName, string kind, string expected)
+    {
+        Assert.Equal(expected, await Analyze(_shared.Client, _interfaceShapesPath, typeName, memberName, kind));
+    }
+
+    // Whether a class can implement an interface member is read from its flags as the runtime
+    // reads them. The written assembly's ISlot.Get is virtual without NewSlot, which ILSpy's
+    // IsVirtual does not count, and ISlot.Level has a getter that is not virtual beside an
+    // abstract setter; the runtime binds Get and Level's setter to Holder's, and not the getter.
+    [Theory]
+    [InlineData("RowBound.ISlot", "Get", "implemented_by",
+        "1 implementation of RowBound.ISlot.Get() [declared]:\nRowBound.Holder.Get()")]
+    [InlineData("RowBound.Holder", "Get", "implements",
+        "1 interface member implemented by RowBound.Holder.Get() [declared]:\nRowBound.ISlot.Get()")]
+    [InlineData("RowBound.ISlot", "Level", "implemented_by",
+        "1 implementation of RowBound.ISlot.Level [declared]:\nRowBound.Holder.Level")]
+    [InlineData("RowBound.Holder", "Level", "implements",
+        "1 interface member implemented by RowBound.Holder.Level [declared]:\nRowBound.ISlot.Level")]
+    [InlineData("RowBound.ISlot", "set_Level", "implemented_by",
+        "1 implementation of RowBound.ISlot.set_Level(int) [declared]:\nRowBound.Holder.set_Level(int)")]
+    [InlineData("RowBound.ISlot", "get_Level", "implemented_by",
+        "No implementations of RowBound.ISlot.get_Level() [declared]")]
+    [InlineData("RowBound.Holder", "get_Level", "implements",
+        "No interface members implemented by RowBound.Holder.get_Level() [declared]")]
+    public async Task WhetherAnInterfaceMemberCanBeImplemented_IsReadFromItsFlagsAsTheRuntimeReadsThem(
+        string typeName, string memberName, string kind, string expected)
+    {
+        Assert.Equal(expected, await AnalyzeWritten(typeName, memberName, kind));
+    }
+
     [Fact]
     public async Task Implements_OnTheMoveNextOfAGeneratedClass_NamesTheInterfaceMemberItsRowNames()
     {

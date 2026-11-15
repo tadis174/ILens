@@ -63,11 +63,11 @@ public static class CompareTool
         using var leaseB = registry.GetOrLoad(assembly_b);
         var comparer = new AssemblyComparer(leaseA.Host, leaseB.Host, include_compiler_generated);
 
-        if (byMember)
-            return CompareBodies(leaseA.Host, leaseB.Host, comparer, type_name, member_name, hint, format, context);
-        if (byType)
-            return CompareMembers(comparer, type_name, limit);
-        return CompareTypes(leaseA.Host, leaseB.Host, comparer, @namespace, limit);
+        var answer = byMember ? CompareBodies(leaseA.Host, leaseB.Host, comparer, type_name, member_name, hint, format, context)
+            : byType ? CompareMembers(comparer, type_name, limit)
+            : CompareTypes(leaseA.Host, leaseB.Host, comparer, @namespace, limit);
+        // The comparison reads code up to where it breaks off, so a change past that does not show.
+        return comparer.NotComparedBrokenBodies() is { } line ? answer.TrimEnd('\n') + "\n" + line : answer;
     }
 
     private static string CompareTypes(AssemblyHost hostA, AssemblyHost hostB, AssemblyComparer comparer,

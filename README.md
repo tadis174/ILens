@@ -38,7 +38,7 @@ winget install Tadis.ILens
 
 Standard winget portable install. The binary lands under `%LOCALAPPDATA%\Microsoft\WinGet\Packages\` and `ilens` becomes available on your user PATH automatically. No admin elevation needed.
 
-See the [user guide](https://tadis174.github.io/ILens/guide.html) for alternative installers, updating, and installation troubleshooting.
+See the [user guide](https://tadis174.github.io/ILens/guide.html) for alternative installers, updating, and installation troubleshooting. On Windows 11 with Smart App Control on, Windows can refuse to start ILens, since `ILens.exe` is not signed; the guide's [Appendix C](https://tadis174.github.io/ILens/guide.html#appendix-install-troubleshooting) explains the block and the options.
 
 ## Setup
 
@@ -69,7 +69,7 @@ find_types(assembly="C:\\path\\to\\dlls\\MyApp.dll", namespace="MyApp.Models")
 
 The `list_allowed_roots` tool surfaces the configured roots so the agent can discover what's reachable.
 
-> **Heads up — a first install needs a full restart, not just a new session.** Windows captures `PATH` per-process at launch, so an already-running Claude app holds a stale environment whenever `ilens` is a brand-new entry on user PATH (true for a first-ever winget portable install, or any `install.ps1` run). Claude Code reads `.mcp.json` only at session start, so the new server isn't registered in any running session either. Recipe: close Claude app entirely → install ILens → relaunch Claude app → start a **new** Claude Code session in the relaunched app. Resumed sessions survive a Claude app restart and still hold the old environment, so they won't find `ilens`. Subsequent `winget upgrade Tadis.ILens` runs don't change PATH; they only need a fresh Claude Code session.
+> **Heads up — a first install needs a full restart, not just a new session.** Windows captures `PATH` per-process at launch, so an already-running Claude app holds a stale environment whenever `ilens` is a brand-new entry on user PATH (true for a first-ever winget portable install, or the first `install.ps1` run). Claude Code reads `.mcp.json` only at session start, so the new server isn't registered in any running session either. Recipe: close Claude app entirely → install ILens → relaunch Claude app → start a **new** Claude Code session in the relaunched app. Resumed sessions survive a Claude app restart and still hold the old environment, so they won't find `ilens`. Later updates, through `winget upgrade Tadis.ILens` or a rerun of `install.ps1`, don't change PATH; they only need a fresh Claude Code session.
 
 ### Step 2: Clients that do not read server instructions
 

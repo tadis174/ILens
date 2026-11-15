@@ -15,7 +15,9 @@ namespace ILens;
 /// <c>Func&lt;int, bool&gt;</c>, whose argument count is the arity; and the reflection form
 /// <c>Func`2</c>. Segments are separated by '.' or by '+', which .NET reflection uses for a
 /// nested type. A '&lt;' opens an argument list only right after a name character, so a
-/// compiler-generated name such as <c>&lt;&gt;c__DisplayClass5_0</c> stays one plain name.
+/// compiler-generated name such as <c>&lt;&gt;c__DisplayClass5_0</c> stays one plain name. A
+/// type may bear brackets in its own name, as C++/CLI names the class of a template instance
+/// <c>gcroot&lt;System::String ^&gt;</c>; <see cref="AsWritten"/> reads a name so.
 /// </remarks>
 public sealed class ParsedTypeName
 {
@@ -28,7 +30,30 @@ public sealed class ParsedTypeName
 
     public IReadOnlyList<Segment> Segments { get; }
 
-    private ParsedTypeName(IReadOnlyList<Segment> segments) => Segments = segments;
+    /// <summary>Each segment as the caller wrote it, for <see cref="AsWritten"/>.</summary>
+    private readonly IReadOnlyList<string> _written;
+
+    private ParsedTypeName(IReadOnlyList<Segment> segments, IReadOnlyList<string> written)
+    {
+        Segments = segments;
+        _written = written;
+    }
+
+    /// <summary>
+    /// The name with each segment read as it stands, its brackets or backtick part of the name
+    /// and no arity stated; null where no segment states an arity, since the name then reads
+    /// alike either way. A class whose own name holds brackets, as C++/CLI names the class of a
+    /// template instance <c>NativePointerWrapper&lt;_GUID&gt;</c>, is named by this reading.
+    /// </summary>
+    public ParsedTypeName AsWritten => HasArity
+        ? new ParsedTypeName(_written.Select(part => new Segment(part, null, null)).ToList(), _written)
+        : null;
+
+    /// <summary>
+    /// The name of <see cref="AsWritten"/>, its segments joined by '.', without building that
+    /// reading; null where no segment states an arity.
+    /// </summary>
+    public string WrittenName => HasArity ? string.Join(".", _written) : null;
 
     /// <summary>The name without any arity, the form <c>ITypeDefinition.FullName</c> takes.</summary>
     public string BareName => string.Join(".", Segments.Select(s => s.Name));
@@ -44,6 +69,7 @@ public sealed class ParsedTypeName
             return null;
 
         var segments = new List<Segment>();
+        var written = new List<string>();
         var depth = 0;
         var start = 0;
         for (var i = 0; i <= text.Length; i++)
@@ -57,14 +83,16 @@ public sealed class ParsedTypeName
             {
                 if (depth != 0)
                     return null;
-                var segment = ParseSegment(text[start..i].Trim());
+                var part = text[start..i].Trim();
+                var segment = ParseSegment(part);
                 if (segment == null)
                     return null;
                 segments.Add(segment);
+                written.Add(part);
                 start = i + 1;
             }
         }
-        return new ParsedTypeName(segments);
+        return new ParsedTypeName(segments, written);
     }
 
     private static bool OpensArguments(string text, int index) =>

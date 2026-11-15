@@ -21,8 +21,9 @@ public static class UsageRoutes
     /// lists the interface below the class that introduced the virtual member. What the member
     /// implements is read as <c>implements</c> reads it
     /// (<see cref="AssemblyHost.FindImplementedInterfaceMembers"/>). Where a base type of its
-    /// class was not read, the line that names interface members may be missing or incomplete,
-    /// and a last line says so, since its absence would read as "implements nothing".
+    /// class, or of a class below that can bind it, was not read, the line that names interface
+    /// members may be missing or incomplete, and a last line says so, since its absence would
+    /// read as "implements nothing".
     /// </remarks>
     public static IReadOnlyList<string> For(AssemblyHost host, IMember member, bool listsCalls)
     {

@@ -360,11 +360,17 @@ public sealed class SymbolResolver
             && lookup.SameNameForwarded.Count == 0 && lookup.Parsed is { } parsed && !EndsInArrayBrackets(typeName))
         {
             // The same rule Lookup applies, for a name the scan meets outside the
-            // reference table: a typeof argument, or a core type written as a type code.
+            // reference table: a typeof argument, or a core type written as a type code. Which
+            // reading such a name stands for is not known before the scan meets it, so a type
+            // that bears the name as written fits beside the reading as type arguments, and is
+            // looked up first.
+            var written = parsed.WrittenName;
             return new ExternalTypeName(typeName.Trim(),
-                candidate => FullNameOf(candidate) == parsed.BareName
-                    && parsed.ArityAgrees(ParsedTypeName.SegmentArities(candidate)),
-                Readings(parsed), null);
+                candidate => (written != null && FullNameOf(candidate) == written)
+                    || (FullNameOf(candidate) == parsed.BareName
+                        && parsed.ArityAgrees(ParsedTypeName.SegmentArities(candidate))),
+                parsed.AsWritten is { } asWritten ? [.. Readings(asWritten), .. Readings(parsed)] : Readings(parsed),
+                null);
         }
         return null;
     }
@@ -469,30 +475,30 @@ public sealed class SymbolResolver
     /// one it knows by name only, so a class the compiler embeds under an ordinary name, such as
     /// NullableAttribute, is named. The first <see cref="NamedLikeShown"/> by their printed names
     /// are named, in a group for each kind where any is referenced or forwarded, and the rest is
-    /// counted.
+    /// counted. Where the last segment holds brackets, the types whose own name is that segment as
+    /// it stands come before those of the name its brackets leave, as in <see cref="Lookup"/>, so a
+    /// class C++/CLI names after a template instance is named for its name without the namespace;
+    /// and the candidates the name as written ends come before those its reading as type arguments
+    /// ends, so a class nested in such a class is told apart as one nested in a generic class is.
     /// </remarks>
     private string NamedLike(TypeLookup lookup, string subject)
     {
         if (lookup.Parsed is not { } parsed)
             return null;
 
-        var own = parsed.Segments[^1].Name;
-        var defined = _typesByOwnName.Value[own].ToList();
-        var definedNames = defined.Select(type => type.FullTypeName.ReflectionName).ToHashSet(StringComparer.Ordinal);
-        var referenced = _referencedTypesByOwnName.Value[own]
-            .Where(type => !definedNames.Contains(type.Name.ReflectionName))
-            .ToList();
-        var known = definedNames.Concat(referenced.Select(type => type.Name.ReflectionName))
-            .ToHashSet(StringComparer.Ordinal);
-        var forwarded = _forwardedTypesByOwnName.Value[own].Where(type => !known.Contains(type.Name.ReflectionName));
-
-        var withGenerated = parsed.Segments.Any(segment => CompilerGeneratedFilter.IsGeneratedName(segment.Name));
-        var candidates = defined.Select(type => (Name: type.FullTypeName, Type: (object)type))
-            .Concat(referenced.Select(type => (type.Name, Type: (object)type)))
-            .Concat(forwarded.Select(type => (type.Name, Type: (object)type)))
-            .Where(candidate => withGenerated || !CompilerGeneratedFilter.IsCompilerGenerated(candidate.Name))
-            .ToList();
-        var onlyNamespace = candidates.Where(candidate => EndsName(parsed, candidate.Name)).ToList();
+        var asWritten = parsed.AsWritten;
+        var bearing = asWritten != null && asWritten.Segments[^1].Name != parsed.Segments[^1].Name
+            ? OwnNamed(asWritten)
+            : [];
+        var (own, candidates) = bearing.Count > 0
+            ? (asWritten.Segments[^1].Name, bearing)
+            : (parsed.Segments[^1].Name, OwnNamed(parsed));
+        var endsAsWritten = asWritten == null
+            ? []
+            : candidates.Where(candidate => EndsName(asWritten, candidate.Name)).ToList();
+        var onlyNamespace = endsAsWritten.Count > 0
+            ? endsAsWritten
+            : candidates.Where(candidate => EndsName(parsed, candidate.Name)).ToList();
         // A definition prints as its name does, so the names sort the types as the groups write them.
         var named = (onlyNamespace.Count > 0 ? onlyNamespace : candidates)
             .OrderBy(candidate => ReferenceFormatter.FormatTypeName(candidate.Name), StringComparer.Ordinal)
@@ -509,6 +515,31 @@ public sealed class SymbolResolver
             : FormatTypeList(shownDefined);
         var more = named.Count - shown.Count;
         return more == 0 ? $"{own}: {list}" : $"{own}: {list}{(grouped ? ";" : "")} and {more} more";
+    }
+
+    /// <summary>
+    /// The candidates of <see cref="NamedLike"/> for one reading of a name: the types the assembly
+    /// defines, references and forwards whose own name is the reading's last segment, each once,
+    /// those whose name follows the compiler's pattern only where the reading has such a segment.
+    /// </summary>
+    private List<(FullTypeName Name, object Type)> OwnNamed(ParsedTypeName parsed)
+    {
+        var own = parsed.Segments[^1].Name;
+        var defined = _typesByOwnName.Value[own].ToList();
+        var definedNames = defined.Select(type => type.FullTypeName.ReflectionName).ToHashSet(StringComparer.Ordinal);
+        var referenced = _referencedTypesByOwnName.Value[own]
+            .Where(type => !definedNames.Contains(type.Name.ReflectionName))
+            .ToList();
+        var known = definedNames.Concat(referenced.Select(type => type.Name.ReflectionName))
+            .ToHashSet(StringComparer.Ordinal);
+        var forwarded = _forwardedTypesByOwnName.Value[own].Where(type => !known.Contains(type.Name.ReflectionName));
+
+        var withGenerated = parsed.Segments.Any(segment => CompilerGeneratedFilter.IsGeneratedName(segment.Name));
+        return defined.Select(type => (Name: type.FullTypeName, Type: (object)type))
+            .Concat(referenced.Select(type => (type.Name, Type: (object)type)))
+            .Concat(forwarded.Select(type => (type.Name, Type: (object)type)))
+            .Where(candidate => withGenerated || !CompilerGeneratedFilter.IsCompilerGenerated(candidate.Name))
+            .ToList();
     }
 
     /// <summary>
@@ -661,10 +692,28 @@ public sealed class SymbolResolver
     /// IL rewriter wrote to the assembly's own type. A forward of a type the assembly defines or
     /// references takes no part either, so a type both referenced and forwarded is a referenced
     /// type, whose forward the answers about it read from <see cref="_forwardedTypes"/>.
+    /// A name a type bears as it stands is that name, brackets included, and its brackets are read
+    /// as type arguments only where no type bears it, as <see cref="ByTypeParameters(ITypeDefinition, string, bool)"/>
+    /// reads a method's name. So a class C++/CLI names after a template instance,
+    /// <c>NativePointerWrapper&lt;_GUID&gt;</c>, is found by the name ILens lists it under, and a
+    /// generic namesake stays reachable as <c>NativePointerWrapper&lt;T&gt;</c>,
+    /// <c>NativePointerWrapper&lt;&gt;</c> or <c>NativePointerWrapper`1</c>, where reading both
+    /// at once would leave the class no name that does not also name the generic type.
     /// </remarks>
     private TypeLookup Lookup(string typeName)
     {
         var parsed = ParsedTypeName.Parse(typeName);
+        return parsed?.AsWritten is { } asWritten && LookupReading(typeName, asWritten) is { Count: > 0 } bearing
+            ? bearing
+            : LookupReading(typeName, parsed);
+    }
+
+    /// <summary>
+    /// <see cref="Lookup"/> for one reading of <paramref name="typeName"/>, or for the name
+    /// verbatim where <paramref name="parsed"/> is null.
+    /// </summary>
+    private TypeLookup LookupReading(string typeName, ParsedTypeName parsed)
+    {
         // Not a name the parser reads; match it verbatim, as a FullName.
         var key = parsed?.BareName ?? typeName;
         var sameNameDefined = _typesByFullName.Value[key].ToList();
@@ -1182,12 +1231,13 @@ public sealed class SymbolResolver
     /// is not virtual, to that type's own override, and a virtual call of a generic method,
     /// which names the nearest override the receiver's class sees. A call on an object of a
     /// class that overrides with a more specific return type names that override as well,
-    /// since the call returns its type. The VB and the F# compiler name the nearest override
-    /// in any virtual call. A virtual call that names an override is therefore counted as a
-    /// call to this declaration (<c>AssemblyHost.BodiesNaming</c>), and <c>CallSiteFinder</c>
-    /// reads whether a call is virtual from the call's instruction where the decompiled code
-    /// carries it. When the result is itself an override, the type system could not resolve
-    /// the declaration it overrides, as for one in an assembly ILens does not load.
+    /// since the call returns its type. The VB compiler names the nearest override in any
+    /// virtual call, and the F# compiler in some. A virtual call that names an override is
+    /// therefore counted as a call to this declaration (<c>AssemblyHost.BodiesNaming</c>), and
+    /// <c>CallSiteFinder</c> reads which method a call names, and whether it is virtual, from
+    /// the call's instruction where the decompiled code carries it. When the result is itself
+    /// an override, the type system could not resolve the declaration it overrides, as for one
+    /// in an assembly ILens does not load.
     /// <see cref="Overriding"/> says what overrides.
     /// </summary>
     public static T SlotDeclarationOf<T>(T member) where T : class, IMember
@@ -1973,6 +2023,10 @@ public sealed class SymbolResolver
                 generic = new UnknownType(name, null);
             }
         }
+        // A type a loaded library defines under the name as written comes first, as in Lookup, and
+        // takes no type arguments.
+        else if (lookup.Parsed?.AsWritten is { } asWritten && _readExternalType(Readings(asWritten)) is { } bearing)
+            return bearing;
         else if (lookup.Parsed is { } parsed && _readExternalType(Readings(parsed)) is { } loaded)
             generic = loaded;
         else if (missingIsNull)

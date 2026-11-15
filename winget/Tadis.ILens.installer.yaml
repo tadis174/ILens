@@ -9,7 +9,7 @@
 # real value never lands in git.
 
 PackageIdentifier: Tadis.ILens
-PackageVersion: 13
+PackageVersion: 14
 InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
@@ -17,7 +17,7 @@ NestedInstallerFiles:
     PortableCommandAlias: ilens
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/tadis174/ILens/releases/download/v13/ILens-windows-x64.zip
+    InstallerUrl: https://github.com/tadis174/ILens/releases/download/v14/ILens-windows-x64.zip
     InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
 ManifestType: installer
 ManifestVersion: 1.10.0

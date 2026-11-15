@@ -4,19 +4,36 @@ using System.Runtime.InteropServices;
 namespace ILens;
 
 /// <summary>
-/// LRU cache of <see cref="AssemblyHost"/> instances keyed by normalized path.
-/// Validates incoming paths through <see cref="PathGuard"/> before loading, and keeps the
-/// process's memory within a budget: when a call ends with the process above it, the
-/// least-recently-used hosts that no call holds are closed until it is back under three
-/// quarters of the budget.
+/// LRU cache of <see cref="AssemblyHost"/> instances keyed by normalized path, each answering for
+/// its file as it was when the host read it. Validates incoming paths through
+/// <see cref="PathGuard"/> before loading, and keeps the process's memory within a budget: when a
+/// call ends with the process above it, the least-recently-used hosts that no call holds are
+/// closed until it is back under three quarters of the budget.
 /// </summary>
 /// <remarks>
+/// A host reads its file whole into memory, so a project can rebuild the file in place while the
+/// host lives: copying a new build over the file succeeded while its host lived (measured
+/// 2026-11-14). Each call therefore compares the file's <see cref="FileStamp"/> with the one the
+/// host read it with, and gets a new host where they differ, as after such a rebuild. The old host
+/// leaves the cache at once, so that no later call gets it, and is closed once no call holds it;
+/// a call that holds it answers from the file as that host read it. A library the host read as a
+/// reference from under an allowed root is held in memory too, read once for every host that
+/// reads that version of it (<see cref="ReferenceImages"/>), and compared at each call in the
+/// same way (<see cref="AssemblyHost.ReferenceStamps"/>), so that a host whose base class a
+/// rebuilt library defines answers from the rebuild. A library whose file is gone gets the host
+/// replaced as well, and the new host looks for it again at each call, since a build may delete a
+/// file before it writes it anew. A reference outside every allowed root stays open until its
+/// host is closed, which keeps it from being replaced meanwhile, and a reference no host of the
+/// assembly found is looked for again only by a host built for another reason.
+///
 /// The budget is the process's private memory as Windows charges it, read when a lease is
 /// released. A host's file size is no measure of what it holds: the decompiler builds a type
 /// system over every reference it can read, and each host builds its own, so a mod of 0.1 MB
-/// holds about 1.75 MB once opened, and 6 MB when the game's assemblies sit in an allow-root
-/// (measured on 335 game mods, 2026-10-06). A closed host's memory is free only once the
-/// garbage collector has run, so the check forces a collection before it reads again.
+/// holds about 1.75 MB once opened (measured on 335 game mods, 2026-10-06). With the game's
+/// assemblies in an allow-root, each mod's host held about 3.5 MB beside the game's libraries,
+/// which the hosts share: 20 mods read 68 of them once, 32.8 MB (measured 2026-11-14). A closed
+/// host's memory is free only once the garbage collector has run, so the check forces a
+/// collection before it reads again.
 ///
 /// A host is handed out as a <see cref="Lease"/>, and only a host that no lease holds is closed,
 /// chosen under the registry's lock. The type system reads the assembly's image lazily, well
@@ -25,9 +42,9 @@ namespace ILens;
 /// comparison holding one assembly while it loads the other, and an assembly that alone needs
 /// more than the budget is closed whenever the calls on it end.
 ///
-/// The registry also owns what outlives a host and is set once for the server: the decompiled
-/// text search_code keeps, which has a share of the budget of its own, and the time a search
-/// may spend decompiling in one call.
+/// The registry also owns what outlives a host and is set once for the server: the libraries the
+/// hosts share, the decompiled text search_code keeps, which has a share of the budget of its own,
+/// and the time a search may spend decompiling in one call.
 /// </remarks>
 public sealed class AssemblyHostRegistry
 {
@@ -45,6 +62,7 @@ public sealed class AssemblyHostRegistry
     private const int SearchShare = 4;
 
     private readonly PathGuard _guard;
+    private readonly ReferenceImages _references = new();
     private readonly long _maxTotalBytes;
     private readonly LinkedList<CacheEntry> _lru = new();
     private readonly Dictionary<string, LinkedListNode<CacheEntry>> _byPath =
@@ -77,51 +95,87 @@ public sealed class AssemblyHostRegistry
     public void HandBackTransientMemory() => Collect(aggressive: true);
 
     /// <summary>
-    /// Validate, then load (or return from cache) the host for an assembly, leased to the
-    /// caller until the returned lease is disposed. Throws <see cref="ArgumentException"/> if
-    /// the path fails validation or if the assembly's file alone is larger than the memory
-    /// budget. Callers needing symbol resolution use <see cref="AssemblyHost.Resolver"/>.
+    /// Validate, then load the host for an assembly, or return the cached one while the file and
+    /// the references held in memory are as that host read them, leased to the caller until the
+    /// returned lease is disposed. Throws
+    /// <see cref="ArgumentException"/> if the path fails validation or if the assembly's file
+    /// alone is larger than the memory budget. Callers needing symbol resolution use
+    /// <see cref="AssemblyHost.Resolver"/>.
     /// </summary>
     public Lease GetOrLoad(string requestedPath)
     {
         var normalized = _guard.Validate(requestedPath);
         CacheEntry entry;
-        long bytes;
+        FileStamp stamp;
+        IReadOnlyList<string> gone = [];
 
         lock (_lock)
         {
+            // Read under the lock, so that a call that waited for it compares the file as it is
+            // then, and before a host reads the file, so that a host's stamp is never newer than
+            // what it holds: a file that changes while a host reads it shows another stamp at the
+            // next call.
+            stamp = FileStamp.Of(normalized);
             if (_byPath.TryGetValue(normalized, out var node))
             {
-                _lru.Remove(node);
-                _lru.AddFirst(node);
-                node.Value.Leases++;
-                return new Lease(this, node.Value);
-            }
+                var host = node.Value.Host;
+                var changed = host.FileStamp != stamp ? "its file changed"
+                    : host.ReferenceStamps.Changed() is { } reference ? $"its reference {Path.GetFileName(reference)} changed"
+                    : null;
+                if (changed is null)
+                {
+                    _lru.Remove(node);
+                    _lru.AddFirst(node);
+                    node.Value.Leases++;
+                    return new Lease(this, node.Value);
+                }
 
-            bytes = new FileInfo(normalized).Length;
+                // The file or a reference changed since the host read it. A host no call holds is
+                // closed here, under the lock, unlike in EnforceBudget: the new host is built under
+                // it anyway, which takes far longer, and closing first frees the old images for it.
+                // The new host watches the references whose files are gone.
+                gone = host.ReferenceStamps.Gone();
+                _lru.Remove(node);
+                _byPath.Remove(normalized);
+                node.Value.LeftBecause = changed;
+                if (node.Value.Leases == 0)
+                    Close(node.Value, changed);
+            }
 
             // A host holds its assembly's whole image in memory, so one whose file alone is
             // larger than the budget can never fit — reject it rather than load it.
-            if (bytes > _maxTotalBytes)
+            if (stamp.Length > _maxTotalBytes)
                 throw new ArgumentException(
-                    $"Assembly is {bytes / 1024 / 1024} MB, which exceeds the " +
+                    $"Assembly is {stamp.Length / 1024 / 1024} MB, which exceeds the " +
                     $"{_maxTotalBytes / 1024 / 1024} MB total memory budget on its own: " +
                     $"{normalized}. Raise the budget with --max-total-size <MB>.");
 
-            entry = new CacheEntry(normalized, new AssemblyHost(normalized, _guard)) { Leases = 1 };
+            entry = new CacheEntry(normalized, new AssemblyHost(normalized, _guard, stamp, _references, gone)) { Leases = 1 };
             _byPath[normalized] = _lru.AddFirst(entry);
         }
 
-        Console.Error.WriteLine($"[ILens] loaded {normalized} ({bytes} bytes)");
+        Console.Error.WriteLine($"[ILens] loaded {normalized} ({stamp.Length} bytes)");
         return new Lease(this, entry);
     }
 
     private void Release(CacheEntry entry)
     {
+        bool close;
         lock (_lock)
+        {
             entry.Leases--;
+            // An entry that left the cache while calls held it left because its file or a
+            // reference changed: the budget closes only entries that no lease holds.
+            close = entry.Leases == 0 && !IsCached(entry);
+        }
+        if (close)
+            Close(entry, entry.LeftBecause);
         EnforceBudget();
     }
+
+    // Called under _lock.
+    private bool IsCached(CacheEntry entry) =>
+        _byPath.TryGetValue(entry.NormalizedPath, out var node) && node.Value == entry;
 
     /// <summary>
     /// When the process is above the budget, collect garbage and close least-recently-used hosts
@@ -172,10 +226,7 @@ public sealed class AssemblyHostRegistry
                 // Logging and Dispose run outside _lock so a slow teardown cannot stall
                 // every concurrent tool call.
                 foreach (var e in batch)
-                {
-                    Console.Error.WriteLine($"[ILens] closed {e.NormalizedPath} (over memory budget)");
-                    DisposeHost(e);
-                }
+                    Close(e, "over memory budget");
                 closed += batch.Count;
             }
         }
@@ -222,9 +273,11 @@ public sealed class AssemblyHostRegistry
         GC.WaitForPendingFinalizers();
     }
 
-    // Each Dispose is wrapped so a single corrupt PE can't poison closing the rest.
-    private static void DisposeHost(CacheEntry entry)
+    // Logs why a host is closed, then disposes it. Each Dispose is wrapped so a single corrupt PE
+    // can't poison closing the rest.
+    private static void Close(CacheEntry entry, string reason)
     {
+        Console.Error.WriteLine($"[ILens] closed {entry.NormalizedPath} ({reason})");
         try
         {
             entry.Host.Dispose();
@@ -267,6 +320,7 @@ public sealed class AssemblyHostRegistry
         public string NormalizedPath { get; } = normalizedPath;
         public AssemblyHost Host { get; } = host;
         public int Leases { get; set; }      // guarded by the registry's _lock
+        public string LeftBecause { get; set; }  // why GetOrLoad took it out of the cache; guarded by _lock
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 
 namespace InterfaceShapes.Returns
@@ -110,6 +111,20 @@ namespace InterfaceShapes.Returns
         public override Jam GetBaseException() => this;
     }
 
+    // Overrides a property of a class another assembly defines with a more specific return type.
+    // A read on an object of the class names the override, in a property pattern as well.
+    public class Smudge : Exception
+    {
+        public override Hashtable Data => null;
+    }
+
+    public static class Inspector
+    {
+        public static int Entries(Smudge smudge) => smudge.Data.Count;
+
+        public static bool IsBlank(object value) => value is Smudge { Data: { Count: 0 } };
+    }
+
     // One use of each member on a receiver of each class.
     public class Clerk
     {
@@ -142,5 +157,47 @@ namespace InterfaceShapes.Returns
         public List<int> ItemsOfNumberTray(NumberTray tray) => tray.Items();
         public List<string> ItemsOfListTray(ListTray<string> tray) => tray.Items();
         public Jam OnJam(Jam jam) => jam.GetBaseException();
+    }
+
+    // A class that lists an interface below an override with a more specific return type. The
+    // runtime binds an interface member by name only to a member of its return type, so Crate
+    // binds IPostable's Address to Parcel's, and Package's override runs in its place, as the
+    // runtime's interface map for Crate names it, and so does Package's Label, through its
+    // getter. Package's Postmark returns dynamic, which is object to the runtime, Freight
+    // overrides Package's Address again, and Envelope lists the interface and declares such an
+    // override itself.
+    public interface IPostable
+    {
+        object Address();
+        object Postmark();
+        object Label { get; }
+    }
+
+    public class Parcel
+    {
+        public virtual object Address() => null;
+        public virtual object Postmark() => null;
+        public virtual object Label => null;
+    }
+
+    public class Package : Parcel
+    {
+        public override string Address() => null;
+        public override dynamic Postmark() => null;
+        public override string Label => null;
+    }
+
+    public class Crate : Package, IPostable
+    {
+    }
+
+    public class Freight : Crate
+    {
+        public override string Address() => null;
+    }
+
+    public class Envelope : Parcel, IPostable
+    {
+        public override string Address() => null;
     }
 }

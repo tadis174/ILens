@@ -10,7 +10,8 @@ namespace Tests;
 /// so the cases are those of its tests: the ExplicitMembers fixture's Sources.cs and
 /// Inherited.cs, whose Twins.cs adds a method that implements for two interfaces; the classes
 /// the compiler generates in CallShapes; the assembly <see cref="RowImplementationAssembly"/>
-/// writes; and ExternalUser's Dial, whose interface IGauge only the second server can load.
+/// writes; and ExternalUser's Dial, whose interface IGauge only the second server can load, and
+/// its Housing, whose members Mount, a class below it, binds to IGauge's.
 /// </summary>
 public sealed class UsageRouteTests
     : IClassFixture<ILensServerFixture>, IClassFixture<ReferencesServerFixture>
@@ -249,6 +250,95 @@ public sealed class UsageRouteTests
         Assert.Equal(
             $"No users of ExternalUser.Dial.{memberName}() [declared]",
             await Analyze(_shared.Client, _userPath, "ExternalUser.Dial", memberName, "used_by"));
+    }
+
+    // A member of BoundBelow's Housing and the question, the header of the answer, and the member
+    // of IGauge that Mount, a class below Housing, binds to it by name.
+    public static TheoryData<string, string, string, string> BoundBelowMembers => new()
+    {
+        { "Read", "used_by", "No users of ExternalUser.BoundBelow.Housing.Read() [declared]", "ExternalLib.IGauge.Read()" },
+        { "Read", "call_sites", "No calls to ExternalUser.BoundBelow.Housing.Read()", "ExternalLib.IGauge.Read()" },
+        {
+            "Unit", "read_by", "No readers of ExternalUser.BoundBelow.Housing.Unit [declared] (via get_Unit)",
+            "ExternalLib.IGauge.Unit"
+        },
+        {
+            "Moved", "used_by",
+            "No users of ExternalUser.BoundBelow.Housing.Moved [declared] (via add_Moved, remove_Moved)",
+            "ExternalLib.IGauge.Moved"
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(BoundBelowMembers))]
+    public async Task UsageOfAMemberAClassBelowBindsToAnInterfaceThatWasNotRead_SaysItWasNotChecked(
+        string memberName, string kind, string header, string implemented)
+    {
+        // Housing lists no interface, and Mount, below it, lists IGauge. Where IGauge's assembly
+        // does not load, a missing line would read as proof that the member implements nothing.
+        string loaded = await Analyze(_references.Client, _userPath, "ExternalUser.BoundBelow.Housing", memberName, kind);
+        string notLoaded = await Analyze(_shared.Client, _userPath, "ExternalUser.BoundBelow.Housing", memberName, kind);
+
+        Assert.Equal(header + "\n" + Through(implemented), loaded);
+        Assert.Equal(header + "\n" + NotChecked, notLoaded);
+    }
+
+    [Fact]
+    public async Task UsageWithOneInterfaceOfAClassBelowReadAndOneNot_NamesWhatItFoundAndSaysMoreWasNotChecked()
+    {
+        // Mount binds ILocalGauge.Reset, which the assembly defines, to Housing.Reset. IGauge,
+        // which Mount lists as well, might declare a Reset too.
+        const string found =
+            "No users of ExternalUser.BoundBelow.Housing.Reset() [declared]\n" +
+            "Implementation: code can call ExternalUser.ILocalGauge.Reset() instead; ask about that member for its uses.";
+
+        Assert.Equal(
+            found, await Analyze(_references.Client, _userPath, "ExternalUser.BoundBelow.Housing", "Reset", "used_by"));
+        Assert.Equal(
+            found + "\nNot checked: whether it implements more interface members" + GaugeNotLoaded,
+            await Analyze(_shared.Client, _userPath, "ExternalUser.BoundBelow.Housing", "Reset", "used_by"));
+    }
+
+    [Fact]
+    public async Task UsageOfAMemberAClassBelowBindsThatListsNoInterfaceThatWasRead_SaysItWasNotChecked()
+    {
+        // Plug lists IGauge alone, so where IGauge's assembly does not load, Plug lists no
+        // interface ILens could read.
+        const string header = "No users of ExternalUser.BoundBelow.Socket.Read() [declared]";
+
+        Assert.Equal(
+            header + "\n" + Through("ExternalLib.IGauge.Read()"),
+            await Analyze(_references.Client, _userPath, "ExternalUser.BoundBelow.Socket", "Read", "used_by"));
+        Assert.Equal(
+            header + "\n" + NotChecked,
+            await Analyze(_shared.Client, _userPath, "ExternalUser.BoundBelow.Socket", "Read", "used_by"));
+    }
+
+    [Fact]
+    public async Task UsageOfAMemberAClassBetweenOverrides_HasNoLineForTheClassBelow()
+    {
+        // Shell overrides Chassis's Read, so Hood binds IGauge's Read to Shell's whatever IGauge
+        // declares, and Chassis's Read implements nothing for it.
+        const string answer = "No users of ExternalUser.BoundBelow.Chassis.Read() [declared]";
+
+        Assert.Equal(
+            answer, await Analyze(_references.Client, _userPath, "ExternalUser.BoundBelow.Chassis", "Read", "used_by"));
+        Assert.Equal(
+            answer, await Analyze(_shared.Client, _userPath, "ExternalUser.BoundBelow.Chassis", "Read", "used_by"));
+    }
+
+    // A class below binds by name only to a public member that is not static, and a constructor
+    // implements nothing, so whatever IGauge declares, nothing is left unchecked for these.
+    [Theory]
+    [InlineData("Tick", "No users of ExternalUser.BoundBelow.Housing.Tick() [declared]")]
+    [InlineData("Zero", "No users of ExternalUser.BoundBelow.Housing.Zero() [declared]")]
+    [InlineData(
+        "Housing",
+        "1 user of ExternalUser.BoundBelow.Housing..ctor() [declared]:\nExternalUser.BoundBelow.Mount..ctor()")]
+    public async Task UsageOfAMemberNoClassBelowCanBindByName_HasNoNotCheckedLine(string memberName, string answer)
+    {
+        Assert.Equal(
+            answer, await Analyze(_shared.Client, _userPath, "ExternalUser.BoundBelow.Housing", memberName, "used_by"));
     }
 
     [Fact]

@@ -152,21 +152,26 @@ public sealed class MethodUserTests : IClassFixture<ILensServerFixture>
 
     // The code of BrokenBody.Shapes.Cut calls Plain and then breaks off inside a call
     // instruction. What it names up to there counts, and the question about another method is
-    // answered from every other body.
+    // answered from every other body. Each answer ends with the methods whose code breaks off.
+    private const string NotCheckedBrokenBodies =
+        "\nNot checked: the code of 2 methods past where it breaks off inside an instruction: " +
+        "BrokenBody.Shapes.Cut(), BrokenBody.Shapes.CutAddress()";
+
     [Theory]
     [InlineData("BrokenBody.Shapes", "Plain",
         "2 users of BrokenBody.Shapes.Plain() [declared]:\n" +
         "BrokenBody.Shapes.Cut()\n" +
-        "BrokenBody.User.Use(Shapes)")]
+        "BrokenBody.User.Use(Shapes)" + NotCheckedBrokenBodies)]
     [InlineData("BrokenBody.Shapes", "Virtual",
         "1 user of BrokenBody.Shapes.Virtual() [declared]:\n" +
-        "BrokenBody.User.Use(Shapes)")]
+        "BrokenBody.User.Use(Shapes)" + NotCheckedBrokenBodies)]
     [InlineData("BrokenBody.Derived", "Virtual",
         "No users of BrokenBody.Derived.Virtual() [declared]\n" +
         "Override: code can call BrokenBody.Shapes.Virtual() instead, so only references to this override are listed; " +
-        "'call_sites' lists those calls whose receiver's type is BrokenBody.Derived or derives from it.")]
+        "'call_sites' lists those calls whose receiver's type is BrokenBody.Derived or derives from it." +
+        NotCheckedBrokenBodies)]
     [InlineData("BrokenBody.Shapes", "Cut",
-        "No users of BrokenBody.Shapes.Cut() [declared]")]
+        "No users of BrokenBody.Shapes.Cut() [declared]" + NotCheckedBrokenBodies)]
     public async Task UsedBy_InAnAssemblyWithAMethodBodyThatBreaksOff_IsAnsweredFromTheOtherBodies(
         string typeName, string memberName, string expected)
     {

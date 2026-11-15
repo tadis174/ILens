@@ -285,6 +285,50 @@ namespace CallShapes.Forms
         public WideDesk(int size) : base(size) { }
     }
 
+    /// <summary>
+    /// A scale whose mark one test checks twice. The decompiler merges the two checks into one
+    /// property pattern that names the property twice, each with a call of its own.
+    /// </summary>
+    public class Scale
+    {
+        public int Mark { get; set; }
+
+        public static bool InRange(object value)
+        {
+            var scale = value as Scale;
+            if (scale != null && scale.Mark != 0 && scale.Mark != 9)
+                return true;
+            return false;
+        }
+    }
+
+    /// <summary>A showcase whose places an indexer reads and sets.</summary>
+    public class Showcase
+    {
+        private readonly Coin[] _places = new Coin[4];
+
+        public Coin this[int place]
+        {
+            get => _places[place];
+            set => _places[place] = value;
+        }
+    }
+
+    /// <summary>
+    /// Sets a place of a <see cref="Showcase"/> with an index initializer, once on a new showcase
+    /// and once on the showcase a property holds. The decompiler writes each as an entry of an
+    /// initializer, which carries the call of the indexer's setter; the second only because the
+    /// property has a setter, which the initializer does not call.
+    /// </summary>
+    public class Shop
+    {
+        public Showcase Front { get; set; } = new Showcase();
+
+        public Showcase Stock(Coin a) => new Showcase { [0] = a };
+
+        public Shop Restock(Coin b) => new Shop { Front = { [1] = b } };
+    }
+
     /// <summary>A delegate type, which code creates without writing a call of its constructor.</summary>
     public delegate int Rate(int cents);
 

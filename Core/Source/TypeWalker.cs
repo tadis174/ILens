@@ -141,10 +141,13 @@ public static class TypeWalker
     /// </summary>
     /// <param name="counterpart">The type as a type system holding the assembly's references
     /// sees it, such as the decompiler's.</param>
-    public static IReadOnlyList<UnreadBase> UnreadBaseTypes(ITypeDefinition counterpart)
+    /// <param name="seen">The reflection names of the base types earlier walks met, which this
+    /// one passes over and adds to, so that the walks of one question read each type once; a
+    /// type an earlier walk found unread was returned by that walk.</param>
+    public static IReadOnlyList<UnreadBase> UnreadBaseTypes(ITypeDefinition counterpart, ISet<string> seen = null)
     {
         var unread = new List<UnreadBase>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        seen ??= new HashSet<string>(StringComparer.Ordinal);
         var pending = new Queue<IType>();
         pending.Enqueue(counterpart);
         while (pending.TryDequeue(out var current))

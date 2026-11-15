@@ -348,8 +348,9 @@ public sealed class CallSiteTests : IClassFixture<ILensServerFixture>
 
     // Forms.cs: a call C# writes without call syntax is shown in the form the code has, under
     // the member that makes it. A conversion the code does not write is shown as the cast that
-    // calls it, an entry of a collection initializer and a property pattern in their braces, a
-    // foreach by its head, and the base constructor call a constructor leaves out as ": base()".
+    // calls it, an entry of a collection initializer and a property pattern in their braces, an
+    // entry of an index initializer as the assignment it is, a foreach by its head, and the base
+    // constructor call a constructor leaves out as ": base()".
     [Theory]
     [InlineData("Coin", "op_Addition", null,
         "3 calls to " + Forms + "Coin.op_Addition(Coin, Coin):\n" +
@@ -432,25 +433,39 @@ public sealed class CallSiteTests : IClassFixture<ILensServerFixture>
         "2 calls to " + Forms + "SizedDesk..ctor(int), argument for size:\n" +
         Forms + "WideDesk..ctor()\n  3 (default)\n" +
         Forms + "WideDesk..ctor(int)\n  size")]
+    [InlineData("Scale", "get_Mark", null,
+        "2 calls to " + Forms + "Scale.get_Mark():\n" +
+        Forms + "Scale.InRange(object)\n  { Mark: not 0 }\n  { Mark: not 9 }")]
+    [InlineData("Showcase", "set_Item", null,
+        "2 calls to " + Forms + "Showcase.set_Item(int, Coin):\n" +
+        Forms + "Shop.Restock(Coin)\n  [1] = b\n" +
+        Forms + "Shop.Stock(Coin)\n  [0] = a")]
+    [InlineData("Showcase", "set_Item", "value",
+        "2 calls to " + Forms + "Showcase.set_Item(int, Coin), argument for value:\n" +
+        Forms + "Shop.Restock(Coin)\n  b\n" +
+        Forms + "Shop.Stock(Coin)\n  a")]
     public async Task FindCallSites_ShowsACallWrittenWithoutCallSyntax(
         string typeName, string memberName, string? parameterName, string expected)
     {
         Assert.Equal(expected, await CallSitesInForms(typeName, memberName, parameterName));
     }
 
-    // An initializer that fills the collection a property holds reads the property once for
-    // each entry and never sets it.
+    // An initializer that fills what a property holds, a collection or the places of an indexer,
+    // reads the property once for each entry and never sets it.
     [Theory]
-    [InlineData("get_Spare",
+    [InlineData("Till", "get_Spare",
         "2 calls to " + Forms + "Till.get_Spare():\n" +
         Forms + "Tellers.WithSpare(Coin, Coin)\n  Spare = { a }\n  Spare = { b }")]
-    [InlineData("set_Spare", "No calls to " + Forms + "Till.set_Spare(Till)")]
-    [InlineData("set_Count",
+    [InlineData("Till", "set_Spare", "No calls to " + Forms + "Till.set_Spare(Till)")]
+    [InlineData("Till", "set_Count",
         "1 call to " + Forms + "Till.set_Count(int):\n" + Forms + "Tellers.WithSpare(Coin, Coin)\n  Count = 2")]
+    [InlineData("Shop", "get_Front",
+        "1 call to " + Forms + "Shop.get_Front():\n" + Forms + "Shop.Restock(Coin)\n  Front = { [1] = b }")]
+    [InlineData("Shop", "set_Front", "No calls to " + Forms + "Shop.set_Front(Showcase)")]
     public async Task FindCallSites_OnAPropertyAnInitializerFills_ShowsTheGetterForEachEntry(
-        string accessor, string expected)
+        string typeName, string accessor, string expected)
     {
-        Assert.Equal(expected, await CallSitesInForms("Till", accessor));
+        Assert.Equal(expected, await CallSitesInForms(typeName, accessor));
     }
 
     // The IL of a property pattern and of a collection initializer names the member of the base

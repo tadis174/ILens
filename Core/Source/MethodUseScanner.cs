@@ -148,11 +148,12 @@ public static class MethodUseScanner
                 switch (token.Kind)
                 {
                     case HandleKind.TypeDefinition or HandleKind.TypeReference or HandleKind.TypeSpecification:
-                        named.Add(module.ResolveType(token, context));
+                        if (Decoding.OrNull(() => module.ResolveType(token, context)) is { } type)
+                            named.Add(type);
                         break;
                     case HandleKind.FieldDefinition or HandleKind.MethodDefinition
                         or HandleKind.MemberReference or HandleKind.MethodSpecification:
-                        if (module.ResolveEntity(token, context) is { } member)
+                        if (Decoding.OrNull(() => module.ResolveEntity(token, context)) is { } member)
                         {
                             members.Add(EventOrMember(member));
                             if (member is IField { Name: BuilderField } builder)

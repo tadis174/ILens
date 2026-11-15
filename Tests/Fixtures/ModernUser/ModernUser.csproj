@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only fixture: an assembly built for .NET 10 whose answers turn on the
+    framework the reference search takes for it. It implements an interface of
+    ExternalLib, built for .NET Standard, whose member takes a class an old
+    framework's System.Runtime does not hold, and declares a constant of such a
+    class's flags and an enum. Private=false keeps ExternalLib.dll from being
+    copied beside it, as for ExternalUser. Not consumed by Tests' source code;
+    only its compiled output is inspected by the ILens server during the e2e
+    suite.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ExternalLib\ExternalLib.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>

@@ -76,6 +76,8 @@ public static class FindMethodsTool
         LeftOut leftOut)
     {
         var matches = new List<IMethod>();
+        var nameFilter = NameFilter.Of(name_contains);
+        var typeNameFilter = NameFilter.Of(type_name_contains);
 
         foreach (var typeDef in host.TypeSystem.MainModule.TypeDefinitions)
         {
@@ -84,16 +86,14 @@ public static class FindMethodsTool
             // By identity, not FullName, which same-named generic types share.
             if (resolvedDeclaringType != null && typeDef.MetadataToken != resolvedDeclaringType.MetadataToken)
                 continue;
-            if (!string.IsNullOrEmpty(type_name_contains) &&
-                !typeDef.Name.Contains(type_name_contains, StringComparison.OrdinalIgnoreCase))
+            if (!typeNameFilter.Matches(typeDef))
                 continue;
 
             foreach (var method in typeDef.DeclaredMethods())
             {
                 if (method.IsAccessor)
                     continue;
-                if (!string.IsNullOrEmpty(name_contains) &&
-                    !method.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase))
+                if (!nameFilter.Matches(method))
                     continue;
 
                 if (parameter_count.HasValue && method.Parameters.Count != parameter_count.Value)

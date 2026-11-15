@@ -155,7 +155,11 @@ public sealed class FieldAccessScanner
         }
         catch (BadImageFormatException)
         {
-            return (false, null);
+            // The body breaks off, or the reader cannot decode it further. What it did with the
+            // field up to there counts, as in the other passes over the method bodies: an address
+            // taken goes on to Trace, which cannot decode such a body and leaves the address
+            // untraced. Where the code breaks off inside an instruction, the answer names the
+            // method (BrokenBodies).
         }
         if (direct)
             return (true, null);
@@ -258,7 +262,7 @@ public sealed class FieldAccessScanner
         {
             callee = _module.ResolveMethod(MetadataTokens.EntityHandle(instruction.Token), context);
         }
-        catch (Exception e) when (e is BadImageFormatException or ArgumentException)
+        catch (Exception e) when (Decoding.Failed(e))
         {
             return Untraced;
         }
@@ -305,7 +309,7 @@ public sealed class FieldAccessScanner
             {
                 type = _module.ResolveType(MetadataTokens.EntityHandle(instruction.Constrained), context);
             }
-            catch (Exception e) when (e is BadImageFormatException or ArgumentException)
+            catch (Exception e) when (Decoding.Failed(e))
             {
                 return Untraced;
             }

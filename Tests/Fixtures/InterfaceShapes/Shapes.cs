@@ -64,6 +64,55 @@ namespace InterfaceShapes
         event EventHandler IFeed.Moved { add { } remove { } }
     }
 
+    // Members no class can implement, which an interface may declare since C# 8: static ones
+    // that are neither abstract nor virtual, sealed ones and a private one. Stencil has the
+    // interface and declares a public member of each of those names, which implements none of
+    // them; the runtime's interface map for Stencil names Area, Trace, Guard, Scale and Changed's
+    // accessors alone, which are abstract or virtual, as an interface's member with a body is by
+    // default, Guard although it is protected, and Scale by its modifier. Tracer has the
+    // interface below Outline, which declares a public Sides without it.
+    public interface IStencil
+    {
+        static int Count => 0;
+        static void Reset() { }
+        sealed int Sides() => 0;
+        sealed int Corners => 0;
+        sealed event EventHandler Moved { add { } remove { } }
+        private int Hidden() => 0;
+
+        int Area();
+        int Trace() => 0;
+        protected int Guard() => 0;
+        static virtual int Scale() => 0;
+        event EventHandler Changed { add { } remove { } }
+    }
+
+    public class Stencil : IStencil
+    {
+        public static int Count => 1;
+        public static void Reset() { }
+        public int Sides() => 1;
+        public int Corners => 1;
+        public event EventHandler Moved { add { } remove { } }
+        public int Hidden() => 1;
+
+        public int Area() => 1;
+        public int Trace() => 1;
+        public int Guard() => 1;
+        public static int Scale() => 1;
+        public event EventHandler Changed { add { } remove { } }
+    }
+
+    public class Outline
+    {
+        public int Sides() => 2;
+    }
+
+    public class Tracer : Outline, IStencil
+    {
+        public int Area() => 2;
+    }
+
     // The control: the same shapes in a class, whose members keep the modifiers a class writes.
     public abstract class Control
     {

@@ -54,7 +54,7 @@ public static class SearchCodeTool
 
         // One call at a time decompiles for an assembly. A second one waits for it as long as
         // its own time allows, and then finds the types the first has done.
-        using var search = registry.CodeTexts.Open(host.AssemblyPath, scope.TopLevelTypes);
+        using var search = registry.CodeTexts.Open(host.AssemblyPath, host.FileStamp, host.ReferenceStamps, scope.TopLevelTypes);
         if (Monitor.TryEnter(search.PassLock, time.Left))
         {
             try
@@ -105,7 +105,9 @@ public static class SearchCodeTool
                 }
             }
         }
-        return Format(hits, failed, limit, $"matching {regex}{scope.Label}");
+        var metadata = ((MetadataModule)host.TypeSystem.MainModule).MetadataFile.Metadata;
+        return Format(hits, failed, limit, $"matching {regex}{scope.Label}",
+            host.NotCheckedBrokenBodies(scope.Methods(metadata)));
     }
 
     /// <summary>
@@ -148,19 +150,24 @@ public static class SearchCodeTool
     /// <summary>
     /// The answer: the header with the number of matching lines, then each member that holds
     /// one, sorted by its printed name, with its lines beneath it in source order, and at the
-    /// end the types that could not be searched. The limit counts matching lines.
+    /// end the types that could not be searched and <paramref name="bodiesNotRead"/>, the line
+    /// for the methods whose code breaks off, where the decompiled code ends. The limit counts
+    /// matching lines.
     /// </summary>
     private static string Format(
-        List<(string Owner, string Line)> hits, IReadOnlyList<string> failed, int limit, string subject)
+        List<(string Owner, string Line)> hits, IReadOnlyList<string> failed, int limit, string subject,
+        string bodiesNotRead)
     {
         // The sort is stable, so a member's lines keep the order they were found in.
         var answer = new StringBuilder(ListOutput.Header(hits.Count, LineNoun, subject))
             .Append(ListOutput.Grouped(hits.OrderBy(hit => hit.Owner, StringComparer.Ordinal).ToList(), limit));
 
-        // Without this line an answer is a proof of absence, so it also follows an empty one.
+        // Without these lines an answer is a proof of absence, so they also follow an empty one.
         if (failed.Count > 0)
             answer.Append($"\nNot searched: {TypeNoun.Count(failed.Count)} that failed to decompile: ")
                 .AppendJoin(", ", failed.Order(StringComparer.Ordinal));
+        if (bodiesNotRead is not null)
+            answer.Append('\n').Append(bodiesNotRead);
         return answer.ToString();
     }
 
@@ -216,6 +223,19 @@ public static class SearchCodeTool
 
         public bool Covers(CodeTextPass.LineRange range) =>
             (IncludeGenerated || !range.Generated) && (Within is null || Within.Contains(range.Type));
+
+        /// <summary>
+        /// The methods whose code the search covers: those of its types, each type nested in one
+        /// included.
+        /// </summary>
+        public IEnumerable<MethodDefinitionHandle> Methods(MetadataReader metadata)
+        {
+            IEnumerable<TypeDefinitionHandle> types = Within ?? TopLevelTypes.SelectMany(type => WithNested(metadata, type));
+            return types.SelectMany(type => metadata.GetTypeDefinition(type).GetMethods());
+        }
+
+        private static IEnumerable<TypeDefinitionHandle> WithNested(MetadataReader metadata, TypeDefinitionHandle type) =>
+            metadata.GetTypeDefinition(type).GetNestedTypes().SelectMany(nested => WithNested(metadata, nested)).Prepend(type);
 
         /// <summary>
         /// The error for a nested type the decompiler writes inside the type around it, such as a

@@ -21,6 +21,14 @@ namespace Tests;
 /// IStep is new to it and its public Order implements IStep's. RenewedStep derives from Step
 /// and lists both interfaces, so it binds IStep's Order anew, to its own override.
 /// </para>
+/// <para>
+/// It also holds an interface's members in flags no C# compiler writes. RowBound.ISlot's Get is
+/// virtual with a body and without NewSlot, and its property Level has a getter with a body
+/// that is not virtual beside an abstract setter. RowBound.Holder lists ISlot and declares a
+/// public virtual Get and a property Level with both accessors; the runtime binds Get and
+/// Level's setter to Holder's and leaves Level's getter out of its interface map, as a program
+/// that loaded an assembly of these shapes measured on 2026-11-14.
+/// </para>
 /// </summary>
 internal static class RowImplementationAssembly
 {
@@ -76,8 +84,32 @@ internal static class RowImplementationAssembly
         Returning(renewedClass, "Order", Overridable, 8);
         renewedClass.CreateType();
 
+        var slot = module.DefineType("RowBound.ISlot",
+            TypeAttributes.Public | TypeAttributes.Interface | TypeAttributes.Abstract);
+        Returning(slot, "Get", MethodAttributes.Public | MethodAttributes.Virtual, 9);
+        var slotLevel = slot.DefineProperty("Level", PropertyAttributes.None, typeof(int), null);
+        slotLevel.SetGetMethod(Returning(slot, "get_Level", MethodAttributes.Public | MethodAttributes.SpecialName, 10));
+        slotLevel.SetSetMethod(Setter(slot, Declares | MethodAttributes.SpecialName));
+        slot.CreateType();
+
+        var holder = module.DefineType("RowBound.Holder", TypeAttributes.Public | TypeAttributes.Class, typeof(object), [slot]);
+        holder.DefineDefaultConstructor(MethodAttributes.Public);
+        Returning(holder, "Get", Overridable | MethodAttributes.NewSlot, 11);
+        var holderLevel = holder.DefineProperty("Level", PropertyAttributes.None, typeof(int), null);
+        holderLevel.SetGetMethod(Returning(holder, "get_Level", Overridable | MethodAttributes.NewSlot | MethodAttributes.SpecialName, 12));
+        holderLevel.SetSetMethod(Setter(holder, Overridable | MethodAttributes.NewSlot | MethodAttributes.SpecialName));
+        holder.CreateType();
+
         assembly.Save(path);
         return path;
+    }
+
+    private static MethodBuilder Setter(TypeBuilder type, MethodAttributes attributes)
+    {
+        var method = type.DefineMethod("set_Level", attributes | MethodAttributes.HideBySig, typeof(void), [typeof(int)]);
+        if ((attributes & MethodAttributes.Abstract) == 0)
+            method.GetILGenerator().Emit(OpCodes.Ret);
+        return method;
     }
 
     private static MethodBuilder Returning(TypeBuilder type, string name, MethodAttributes attributes, int value)

@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Reflection.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.Decompiler.TypeSystem.Implementation;
@@ -37,10 +38,30 @@ namespace ILens;
 /// <c>dynamic</c> is not found to implement one returning <c>object</c>.
 /// </para>
 /// <para>
+/// Only a member of the interface that is abstract or virtual is bound, by a row or by name.
+/// One that is neither, such as a static member that is not marked abstract or virtual, a
+/// sealed one or a private one, which C# allows since version 8, is implemented by nothing, and
+/// the runtime's interface map leaves it out, whatever public members of its name a class
+/// declares. A protected or internal member with a body is virtual, as an interface's member
+/// with a body is by default, and a class's public member of its name implements it. A property
+/// or an event can be implemented where any of its accessors can (<see cref="Implementable"/>).
+/// </para>
+/// <para>
 /// A class that has the interface only through a base class keeps the binding of the nearest
-/// class above it that lists the interface. Where the bound member is virtual, the most
-/// derived override on the way down to the class runs in its place and implements the member
-/// as well; a member that only hides the bound one does not.
+/// class above it that lists the interface. What implements the member for the objects of a
+/// class is what runs for them: where the bound member is virtual, the most derived override
+/// on the way down to the class runs in its place, and a member that only hides the bound one
+/// does not.
+/// </para>
+/// <para>
+/// Such an override can sit above the class that lists the interface. The runtime binds by
+/// name only to a method of the interface member's return type, as <see cref="Fits"/> does, so
+/// where <c>Mid</c> overrides <c>Base.Get</c> with <c>string Get()</c>,
+/// <c>class Lister : Mid, IPart { }</c> binds <c>IPart.Get</c> to <c>Base.Get</c>. The
+/// runtime's interface map for <c>Lister</c> names <c>Mid.Get</c>, which runs in its place,
+/// and <c>Base.Get</c> implements nothing for <c>Lister</c>. <see cref="Fits"/> passes over an
+/// override that returns <c>dynamic</c> where the interface member returns <c>object</c> as
+/// well, and the override then found to run is the one the runtime calls.
 /// </para>
 /// <para>
 /// A member can be bound only by classes below its own, as that of a base class without the
@@ -64,27 +85,40 @@ public static class InterfaceImplementations
     /// <see cref="Of"/> an interface member that is implemented.
     /// </summary>
     /// <param name="BoundBy">
-    /// The classes that list the interface and bind the two, when the implementing member's own
-    /// class does not; none when it does.
+    /// The classes that list the interface, for whose objects the implementing member runs, when
+    /// it does not implement the interface member for its own class's objects; none when it does.
     /// </param>
     public sealed record Found(IMember Member, IReadOnlyList<ITypeDefinition> BoundBy);
 
     /// <summary>
     /// The interface members <paramref name="member"/> implements, each as the class that binds
     /// it sees it: a member of a generic interface comes with the type arguments that class
-    /// gives.
+    /// gives. <c>Unread</c> holds the types that could not be read and may declare more such
+    /// members: the base types of the member's own class where a base type can bind it
+    /// (<see cref="DependsOnBaseTypes"/>), and those of each class below that can bind it by
+    /// name.
     /// </summary>
-    public static IReadOnlyList<Found> Of(IMember member)
+    public static (IReadOnlyList<Found> Members, IReadOnlyList<UnreadBase> Unread) Of(IMember member)
     {
         var results = new Results();
         foreach (var implemented in RowsOf(member))
             results.Add(implemented, binder: null);
 
+        // An explicit implementation's own row names what it implements, and a member no base
+        // type can bind implements by its rows alone, so nothing that could not be read leaves
+        // the answer open. The walks of one question share the types they met, so that each
+        // type is read once.
+        var unread = new Dictionary<string, UnreadBase>(StringComparer.Ordinal);
+        var walked = new HashSet<string>(StringComparer.Ordinal);
+        if (!member.IsExplicitInterfaceImplementation && DependsOnBaseTypes(member)
+            && member.DeclaringTypeDefinition is { } owner)
+            Note(owner);
+
         // Only a class or a struct binds interface members to its own. An interface's member
         // with the name of a base interface's member hides that one, and implements it only by
         // a row.
         if (member.DeclaringTypeDefinition is not { Kind: TypeKind.Class or TypeKind.Struct } declaring)
-            return results.ToList();
+            return (results.ToList(), unread.Values.ToList());
 
         // In the view of the member's own class: the member is what the class binds an
         // interface member to, or overrides that member. A member the class binds by a row may
@@ -107,27 +141,66 @@ public static class InterfaceImplementations
         }
 
         // In the view of a class below that lists an interface itself: such a class binds by
-        // name to the first public member upward, which can be this one.
+        // name to the first public member upward, and that member, or an override of it that
+        // runs in its place, can be this one. An interface it lists that could not be read may
+        // declare such a member as well, unless the member is static or a constructor, or a
+        // class on the way keeps it from implementing for that class (Shadowed). Where C# lets a
+        // class bind a static member of its base class, the compiler adds a method to that
+        // class, which implements by a row and passes the call on.
         if (member.Accessibility == Accessibility.Public && declaring is { Kind: TypeKind.Class, IsSealed: false })
         {
+            var bindsByName = !member.IsStatic && member is not IMethod { IsConstructor: true };
             foreach (var type in declaring.ParentModule.TypeDefinitions)
             {
-                if (type.Kind != TypeKind.Class || !type.DirectBaseTypes.Any(direct => direct.Kind == TypeKind.Interface))
+                // A class keeps its base class's bindings unless it lists an interface, and a
+                // type that could not be read is of no known kind, so a class is passed over
+                // only where each of its direct base types is a class.
+                if (type.Kind != TypeKind.Class || type.Equals(declaring)
+                    || type.DirectBaseTypes.All(direct => direct.Kind == TypeKind.Class))
                     continue;
-                if (type.Equals(declaring) || !Chain(type).Levels.Any(level => declaring.Equals(level.GetDefinition())))
+                var typeLevels = Chain(type).Levels;
+                if (!typeLevels.Any(level => declaring.Equals(level.GetDefinition())))
                     continue;
+                if (bindsByName && !Shadowed(typeLevels, declaring, member))
+                    Note(type);
 
                 foreach (var interfaceType in Listed(type))
                 {
                     foreach (var candidate in NamedLike(interfaceType, member))
                     {
-                        if (bindings.Bound(type, interfaceType, candidate).Members.Any(bound => Same(bound, member)))
+                        if (bindings.Bound(type, interfaceType, candidate).Members
+                            .Any(bound => Same(Runs(typeLevels, bound) ?? bound, member)))
                             results.Add(candidate, binder: type);
                     }
                 }
             }
         }
-        return results.ToList();
+        return (results.ToList(), unread.Values.ToList());
+
+        void Note(ITypeDefinition type)
+        {
+            foreach (var unreadType in TypeWalker.UnreadBaseTypes(type, walked))
+                unread.TryAdd(unreadType.TypeName, unreadType);
+        }
+    }
+
+    /// <summary>
+    /// True if a class from the one <paramref name="levels"/> start at up to
+    /// <paramref name="declaring"/>, that one left out, declares a member that keeps
+    /// <paramref name="member"/> from implementing an interface member for the first class,
+    /// whatever its interfaces declare: an override of it, which runs in its place, or a public
+    /// member of its name, parameters, return type and staticness, which that class binds by
+    /// name before it reaches <paramref name="member"/>.
+    /// </summary>
+    private static bool Shadowed(IReadOnlyList<IType> levels, ITypeDefinition declaring, IMember member)
+    {
+        var below = levels.TakeWhile(level => !declaring.Equals(level.GetDefinition())).ToList();
+        // The member as the first class sees it, with the type arguments that class gives.
+        var asSeen = levels.Skip(below.Count).FirstOrDefault() is { } own
+            ? NamedLike(own, member).FirstOrDefault(candidate => Same(candidate, member)) ?? member
+            : member;
+        return below.Any(level => NamedLike(level, asSeen)
+            .Any(candidate => Reaches(candidate, member) || Fits(candidate, asSeen)));
     }
 
     /// <summary>
@@ -142,9 +215,12 @@ public static class InterfaceImplementations
     /// <remarks>
     /// A static member counts among those that implement through their rows alone, whatever
     /// its accessibility: each of the 3,287 static members that implement in the core library
-    /// of .NET 10.0.12 has a row of its own (counted 2026-10-13).
+    /// of .NET 10.0.12 has a row of its own (counted 2026-10-13). Where a class binds a static
+    /// member of its base class, the C# compiler adds a method to it that implements by a row
+    /// and passes the call on, and the runtime calls the base class's member through it
+    /// (measured 2026-11-14 with .NET 10).
     /// </remarks>
-    public static bool DependsOnBaseTypes(IMember member) =>
+    private static bool DependsOnBaseTypes(IMember member) =>
         member.ExplicitlyImplementedInterfaceMembers.Any(implemented => implemented.DeclaringTypeDefinition is null)
         || (member.DeclaringTypeDefinition is { Kind: TypeKind.Class or TypeKind.Struct }
             && member is not IMethod { IsConstructor: true }
@@ -152,14 +228,19 @@ public static class InterfaceImplementations
 
     /// <summary>
     /// The members that implement <paramref name="interfaceMember"/>, a method, an accessor, a
-    /// property or an event of an interface, for a class of the interface's assembly: what each
-    /// such class binds the member to, and the override that runs in its place. A bound member
-    /// can belong to a class of another assembly. <c>Unread</c> holds the base classes that
-    /// could not be read above a class for which no binding was found below them.
+    /// property or an event of an interface, for a class of the interface's assembly: what runs
+    /// for the objects of each such class, the member the class binds or the override that runs
+    /// in its place. A bound member can belong to a class of another assembly. <c>Unread</c>
+    /// holds the base classes that could not be read above a class for which no binding was
+    /// found below them.
     /// </summary>
     public static (IReadOnlyList<Found> Members, IReadOnlyList<UnreadBase> Unread) ImplementersOf(IMember interfaceMember)
     {
         var asked = interfaceMember.MemberDefinition;
+        // A member nothing can implement is answered without a search (see the class's remarks).
+        if (!Implementable(asked))
+            return ([], []);
+
         var interfaceDefinition = asked.DeclaringTypeDefinition;
         var bindings = new Bindings();
         var results = new Results();
@@ -202,14 +283,14 @@ public static class InterfaceImplementations
                         unread.TryAdd(missing.TypeName, missing);
                     foreach (var bound in binding.Members)
                     {
-                        // The member is bound in its own class's view when that class is the
-                        // one looked at and nothing below overrides it; any other class it is
-                        // bound for names the class that lists the interface.
-                        var runs = Runs(levels, bound);
-                        if (runs is not null)
-                            results.Add(runs.MemberDefinition, binder: null);
-                        results.Add(bound.MemberDefinition,
-                            binder: runs is null && type.Equals(bound.DeclaringTypeDefinition) ? null : lister.GetDefinition());
+                        // What runs for an object of the class looked at implements the member
+                        // for it: the override that runs in the bound member's place, or the
+                        // bound member, which is listed on the turn of a class it runs for. What
+                        // runs is bound in its own class's view when that class is the one looked
+                        // at, and otherwise for the class that lists the interface.
+                        var runs = Runs(levels, bound) ?? bound;
+                        results.Add(runs.MemberDefinition,
+                            binder: type.Equals(runs.DeclaringTypeDefinition) ? null : lister.GetDefinition());
                     }
                 }
             }
@@ -222,13 +303,14 @@ public static class InterfaceImplementations
     /// name a class's member, for an override that returns a more specific type (see
     /// <see cref="Overriding"/>). An interface that was not loaded is taken for one only under
     /// the name C# gives an explicit implementation. A member with which an interface makes a
-    /// member of its base interface abstract again has such a row and implements nothing.
+    /// member of its base interface abstract again has such a row and implements nothing, and so
+    /// does a row that names a member nothing can implement, which the runtime refuses to load.
     /// </summary>
     private static IEnumerable<IMember> RowsOf(IMember member) =>
         member is { IsAbstract: true, DeclaringTypeDefinition.Kind: TypeKind.Interface }
             ? []
             : member.ExplicitlyImplementedInterfaceMembers.Where(implemented =>
-                implemented.DeclaringTypeDefinition is { Kind: TypeKind.Interface }
+                (implemented.DeclaringTypeDefinition is { Kind: TypeKind.Interface } && Implementable(implemented))
                 || (implemented.DeclaringTypeDefinition is null && member.IsExplicitInterfaceImplementation));
 
     /// <summary>
@@ -358,6 +440,49 @@ public static class InterfaceImplementations
         (member.MemberDefinition.ParentModule, member.MemberDefinition.MetadataToken);
 
     /// <summary>
+    /// True if a class can implement <paramref name="interfaceMember"/>, a member of an
+    /// interface: a method or an accessor marked virtual or abstract, or a property or an event
+    /// with such an accessor.
+    /// </summary>
+    /// <remarks>
+    /// <para>The flags are read from the metadata as the runtime reads them, not from ILSpy's
+    /// <c>IsVirtual</c>. The runtime binds an interface's virtual method without NewSlot, which a
+    /// compiler other than C#'s can write, one marked Final as well, and a property whose getter
+    /// has a body and is not virtual through its abstract setter, as a program that loaded such
+    /// an assembly measured on 2026-11-14; RowImplementationAssembly in the tests writes the
+    /// first two.</para>
+    /// <para>Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: <c>IsVirtual</c> of an
+    /// instance method asks for NewSlot and against Final as well, and a property's or an event's
+    /// reads its first accessor alone; a method without a metadata row is judged by those flags.
+    /// The case: WhetherAnInterfaceMemberCanBeImplemented_IsReadFromItsFlagsAsTheRuntimeReadsThem
+    /// in ImplementedByTests.</para>
+    /// </remarks>
+    private static bool Implementable(IMember interfaceMember) =>
+        interfaceMember is IMethod or IProperty or IEvent
+        && AccessorsOf(interfaceMember).Any(accessor => accessor is IMethod method && Marked(method));
+
+    /// <summary>
+    /// The accessors of <paramref name="member"/>, a property or an event, each of which may be
+    /// null; for any other member, the member itself.
+    /// </summary>
+    private static IMember[] AccessorsOf(IMember member) => member switch
+    {
+        IProperty property => [property.Getter, property.Setter],
+        IEvent @event => [@event.AddAccessor, @event.RemoveAccessor, @event.InvokeAccessor],
+        _ => [member],
+    };
+
+    /// <summary>True if <paramref name="method"/> is marked virtual or abstract.</summary>
+    private static bool Marked(IMethod method) => method?.MemberDefinition switch
+    {
+        IMethod { ParentModule: MetadataModule module, MetadataToken: { IsNil: false, Kind: HandleKind.MethodDefinition } token } =>
+            (module.MetadataFile.Metadata.GetMethodDefinition((MethodDefinitionHandle)token).Attributes
+                & (MethodAttributes.Virtual | MethodAttributes.Abstract)) != 0,
+        IMethod other => other.IsVirtual || other.IsAbstract,
+        _ => false,
+    };
+
+    /// <summary>
     /// True if a class may bind <paramref name="interfaceMember"/> to its member
     /// <paramref name="member"/> by name.
     /// </summary>
@@ -390,6 +515,11 @@ public static class InterfaceImplementations
         /// </summary>
         public Binding Bound(IType lister, IType interfaceType, IMember interfaceMember)
         {
+            // A member that is neither abstract nor virtual is implemented by nothing, as the
+            // class's remarks say.
+            if (!Implementable(interfaceMember))
+                return new Binding([], null);
+
             var key = (lister.GetDefinition()?.ParentModule, lister.ReflectionName, interfaceType.ReflectionName,
                 interfaceMember.MemberDefinition.MetadataToken);
             if (_bound.TryGetValue(key, out var known))
@@ -418,12 +548,7 @@ public static class InterfaceImplementations
             if (rows.Count == 0)
                 return [];
 
-            IMember[] named = interfaceMember switch
-            {
-                IProperty property => [property.Getter, property.Setter],
-                IEvent @event => [@event.AddAccessor, @event.RemoveAccessor, @event.InvokeAccessor],
-                _ => [interfaceMember],
-            };
+            var named = AccessorsOf(interfaceMember);
             return rows
                 .Where(row => named.Any(target => target is not null && Same(row.Implemented, target))
                     && (interfaceType is null || row.Implemented.DeclaringType.ReflectionName == interfaceType.ReflectionName))

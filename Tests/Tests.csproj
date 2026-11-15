@@ -121,7 +121,7 @@
   </ItemGroup>
 
   <!-- References: the assemblies the fixtures reference, ExternalLib for
-       ExternalUser and HarmonyLib for HarmonyMod, one level below the test
+       ExternalUser and ModernUser, and HarmonyLib for HarmonyMod, one level below the test
        output. The shared server searches only the top of an allow-root, so it
        does not find them; the reference tests give a second server this folder
        as an allow-root of its own. Lib.Harmony.Ref is the reference assembly
@@ -183,6 +183,18 @@
        interface's members and by the tests on such an override. -->
   <ItemGroup>
     <ProjectReference Include="Fixtures\InterfaceShapes\InterfaceShapes.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- ModernUser fixture: an assembly built for .NET 10 whose answers turn on
+       the framework the reference search takes for it, with an implementation
+       of an interface of ExternalLib, a constant of flags and an enum. Used by
+       the tests on the framework of an assembly built for .NET. -->
+  <ItemGroup>
+    <ProjectReference Include="Fixtures\ModernUser\ModernUser.csproj"
                       ReferenceOutputAssembly="false"
                       Private="true"
                       OutputItemType="Content"

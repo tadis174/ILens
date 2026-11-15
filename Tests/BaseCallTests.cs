@@ -8,11 +8,18 @@ namespace Tests;
 /// BaseCalls.cs has <c>Lodge</c> call the members of <c>Gate</c> through <c>base.</c> in a
 /// lambda, an iterator, an async method and a local function, <c>Arch</c> call an override it
 /// does not override itself, and <c>Porter</c> call a generic method on a class that overrides
-/// it. ExternalUser's BaseCalls.cs does the first with a class of ExternalLib.
+/// it. ExternalUser's BaseCalls.cs does the first with a class of ExternalLib. VbModules'
+/// Calls.vb and Overrides.vb, and InterfaceShapes' Returns.cs, hold calls of overrides that
+/// Visual Basic and C# compile as calls of the override itself, most of them written without
+/// call syntax.
 /// </summary>
 public sealed class BaseCallTests : IClassFixture<ILensServerFixture>
 {
     private const string Shapes = "CallShapes.BaseCalls.";
+    private const string Overrides = "VbModules.Overrides.";
+
+    private const string ArrayListRoute = "Override: code can call the System.Collections.ArrayList member it " +
+        "overrides instead, which another assembly defines, so those calls are not counted here.";
 
     private readonly ILensServerFixture _server;
 
@@ -242,6 +249,87 @@ public sealed class BaseCallTests : IClassFixture<ILensServerFixture>
             "VbModules.Calls.Lamp.Shine()\n  Glow()\n" +
             "Override: code can call VbModules.Calls.Lantern.Glow() instead; listed are those calls whose " +
             "receiver's type is VbModules.Calls.Lamp or derives from it.", text);
+    }
+
+    // A property read and a compound assignment through MyClass call Lamp's override of Light
+    // without virtual dispatch, and the decompiled C# writes them as a plain read and a plain
+    // increment. Each call is listed once under the override, and nothing after the list says a
+    // call was not shown or that the decompiled C# holds a call to Lantern's that the IL lacks.
+    // Lantern's Light is the control: the calls through MyClass never reach it.
+    [Theory]
+    [InlineData("Lamp", "get_Light",
+        "2 calls to VbModules.Calls.Lamp.get_Light():\n" +
+        "VbModules.Calls.Lamp.Brighten()\n  Light++\n" +
+        "VbModules.Calls.Lamp.Brightness()\n  Light\n" +
+        "Override: code can call VbModules.Calls.Lantern.get_Light() instead; listed are those calls whose " +
+        "receiver's type is VbModules.Calls.Lamp or derives from it.")]
+    [InlineData("Lamp", "set_Light",
+        "1 call to VbModules.Calls.Lamp.set_Light(int):\n" +
+        "VbModules.Calls.Lamp.Brighten()\n  Light++\n" +
+        "Override: code can call VbModules.Calls.Lantern.set_Light(int) instead; listed are those calls whose " +
+        "receiver's type is VbModules.Calls.Lamp or derives from it.")]
+    [InlineData("Lantern", "get_Light", "No calls to VbModules.Calls.Lantern.get_Light()")]
+    public async Task CallSites_OnAPropertyCalledThroughMyClass_ListsEachCallOnce(
+        string typeName, string memberName, string expected)
+    {
+        Assert.Equal(expected, await Analyze("VbModules.dll", "VbModules.Calls." + typeName, memberName, "call_sites"));
+    }
+
+    // Visual Basic names the override itself in a call on an object of its class, also where the
+    // member it overrides is another assembly's: VbModules' Shelf overrides ArrayList's indexer,
+    // Count, GetEnumerator and Add, and Spool MemoryStream's Position. InterfaceShapes' Smudge
+    // overrides Exception.Data with a more specific return type, which a C# compiler names in a
+    // call on an object of its class, also in a property pattern. Each call is listed once, in
+    // the form the decompiled C# writes it in, and nothing after the list says a call was not
+    // shown.
+    [Theory]
+    [InlineData("VbModules.dll", Overrides + "Shelf", "get_Count",
+        "2 calls to " + Overrides + "Shelf.get_Count():\n" +
+        Overrides + "Shelf.Size()\n  Count\n" +
+        Overrides + "Users.Measure(Shelf)\n  shelf.Count\n" +
+        "Implementation: code can call System.Collections.ICollection.get_Count() instead; ask about that " +
+        "member for its uses.\n" + ArrayListRoute)]
+    [InlineData("VbModules.dll", Overrides + "Shelf", "get_Item",
+        "1 call to " + Overrides + "Shelf.get_Item(int):\n" +
+        Overrides + "Users.Store(Shelf)\n  shelf[1]\n" +
+        "Implementation: code can call System.Collections.IList.get_Item(int) instead; ask about that " +
+        "member for its uses.\n" + ArrayListRoute)]
+    [InlineData("VbModules.dll", Overrides + "Shelf", "set_Item",
+        "1 call to " + Overrides + "Shelf.set_Item(int, object):\n" +
+        Overrides + "Users.Store(Shelf)\n  shelf[0] = RuntimeHelpers.GetObjectValue(shelf[1])\n" +
+        "Implementation: code can call System.Collections.IList.set_Item(int, object) instead; ask about " +
+        "that member for its uses.\n" + ArrayListRoute)]
+    [InlineData("VbModules.dll", Overrides + "Shelf", "GetEnumerator",
+        "1 call to " + Overrides + "Shelf.GetEnumerator():\n" +
+        Overrides + "Users.Walk(Shelf)\n  foreach (object item in shelf)\n" +
+        "Implementation: code can call System.Collections.IEnumerable.GetEnumerator() instead; ask about " +
+        "that member for its uses.\n" + ArrayListRoute)]
+    [InlineData("VbModules.dll", Overrides + "Shelf", "Add",
+        "2 calls to " + Overrides + "Shelf.Add(object):\n" +
+        Overrides + "Users.Fill(ref Shelf)\n  { 1 }\n  { 2 }\n" +
+        "Implementation: code can call System.Collections.IList.Add(object) instead; ask about that " +
+        "member for its uses.\n" + ArrayListRoute)]
+    [InlineData("VbModules.dll", Overrides + "Spool", "get_Position",
+        "1 call to " + Overrides + "Spool.get_Position():\n" +
+        Overrides + "Users.Advance(Spool)\n  spool.Position++\n" +
+        "Override: code can call the System.IO.MemoryStream member it overrides instead, which another " +
+        "assembly defines, so those calls are not counted here.")]
+    [InlineData("VbModules.dll", Overrides + "Spool", "set_Position",
+        "2 calls to " + Overrides + "Spool.set_Position(long):\n" +
+        Overrides + "Users.Advance(Spool)\n  spool.Position++\n" +
+        Overrides + "Users.Rewind(Spool)\n  spool.Position = 0L\n" +
+        "Override: code can call the System.IO.MemoryStream member it overrides instead, which another " +
+        "assembly defines, so those calls are not counted here.")]
+    [InlineData("InterfaceShapes.dll", "InterfaceShapes.Returns.Smudge", "get_Data",
+        "2 calls to InterfaceShapes.Returns.Smudge.get_Data():\n" +
+        "InterfaceShapes.Returns.Inspector.Entries(Smudge)\n  smudge.Data\n" +
+        "InterfaceShapes.Returns.Inspector.IsBlank(object)\n  { Data: { } data }\n" +
+        "Override: code can call the System.Exception member it overrides instead, which another assembly " +
+        "defines, so those calls are not counted here.")]
+    public async Task CallSites_OnAnOverrideOfAnotherAssemblysMember_ListsEachCallOnce(
+        string fixture, string typeName, string memberName, string expected)
+    {
+        Assert.Equal(expected, await Analyze(fixture, typeName, memberName, "call_sites"));
     }
 
     private Task<string> Analyze(string fixture, string typeName, string? memberName, string kind,

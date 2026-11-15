@@ -32,6 +32,20 @@ sessions that loaded ILens (Claude Code, etc.) and re-run the uninstaller.
     Write-Host "No install directory at $installDir; nothing to remove."
 }
 
+# The folders the installer keeps beside the install while it replaces it, which only an
+# interrupted or disturbed run leaves behind.
+foreach ($leftoverDir in "$installDir.new", "$installDir.old") {
+    if (Test-Path -LiteralPath $leftoverDir) {
+        Write-Step "Removing $leftoverDir"
+        try {
+            Remove-Item -LiteralPath $leftoverDir -Recurse -Force
+            $didSomething = $true
+        } catch {
+            Write-Warning "Could not remove ${leftoverDir}: $($_.Exception.Message) Delete it once nothing uses it."
+        }
+    }
+}
+
 # 2. Strip the install dir from user-level PATH.
 $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
 if ($null -eq $userPath) { $userPath = '' }

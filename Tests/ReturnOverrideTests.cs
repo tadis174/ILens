@@ -10,8 +10,11 @@ namespace Tests;
 /// it is. The InterfaceShapes fixture's Returns.cs holds the shapes: Letter overrides the
 /// members of Sheet that way, Note overrides Letter's, once with Letter's return type and once
 /// with a more specific one again, Slip overrides Note's, Seal's override is sealed and Draft's
-/// abstract, and as the control Blank declares Copy anew and Card overrides that one. The
-/// fixture targets .NET 10, since the compiler refuses such an override for netstandard2.0.
+/// abstract, and as the control Blank declares Copy anew and Card overrides that one. Crate lists
+/// an interface below Package's overrides, of a method and a property with a more specific return
+/// type and of a method returning dynamic, and Envelope lists it and declares such an override
+/// itself. The fixture targets .NET 10, since the compiler refuses such an override for
+/// netstandard2.0.
 /// </summary>
 public sealed class ReturnOverrideTests : IClassFixture<ILensServerFixture>
 {
@@ -390,6 +393,73 @@ public sealed class ReturnOverrideTests : IClassFixture<ILensServerFixture>
     public async Task Implements_FollowsSuchAnOverrideToTheMemberItOverrides(string type, string member, string expected)
     {
         Assert.Equal(expected, await Analyze(Returns + type, member, "implements"));
+    }
+
+    // Crate lists IPostable below Package's overrides of Parcel's members. The runtime binds an
+    // interface member by name only to a member of its return type, so Crate binds Parcel's
+    // Address, and Package's override, which returns a more specific type, runs in its place, as
+    // the runtime's interface map for Crate names it; Package's Label does so through its getter.
+    // Package's Postmark returns dynamic, which is object to the runtime, and is answered alike.
+    // Each of Package's overrides implements the interface member for Crate. Parcel's Address
+    // implements it for no class, since Envelope, which lists the interface itself, overrides
+    // Address as well, and Parcel's Postmark and Label implement it for Envelope alone. Freight
+    // overrides Package's Address again. The usage answers' Implementation line follows
+    // implements.
+    [Theory]
+    [InlineData("IPostable", "Address", "implemented_by",
+        "3 implementations of InterfaceShapes.Returns.IPostable.Address() [declared]:\n" +
+        Returns + "Envelope.Address()\n" +
+        Returns + "Freight.Address()\n" +
+        Returns + "Package.Address() (for " + Returns + "Crate)")]
+    [InlineData("IPostable", "Postmark", "implemented_by",
+        "2 implementations of InterfaceShapes.Returns.IPostable.Postmark() [declared]:\n" +
+        Returns + "Package.Postmark() (for " + Returns + "Crate)\n" +
+        Returns + "Parcel.Postmark() (for " + Returns + "Envelope)")]
+    [InlineData("Package", "Address", "implements",
+        "1 interface member implemented by InterfaceShapes.Returns.Package.Address() [declared]:\n" +
+        Returns + "IPostable.Address() (for " + Returns + "Crate)")]
+    [InlineData("Package", "Postmark", "implements",
+        "1 interface member implemented by InterfaceShapes.Returns.Package.Postmark() [declared]:\n" +
+        Returns + "IPostable.Postmark() (for " + Returns + "Crate)")]
+    [InlineData("Parcel", "Address", "implements",
+        "No interface members implemented by InterfaceShapes.Returns.Parcel.Address() [declared]")]
+    [InlineData("Parcel", "Postmark", "implements",
+        "1 interface member implemented by InterfaceShapes.Returns.Parcel.Postmark() [declared]:\n" +
+        Returns + "IPostable.Postmark() (for " + Returns + "Envelope)")]
+    [InlineData("Freight", "Address", "implements",
+        "1 interface member implemented by InterfaceShapes.Returns.Freight.Address() [declared]:\n" +
+        Returns + "IPostable.Address()")]
+    [InlineData("Envelope", "Address", "implements",
+        "1 interface member implemented by InterfaceShapes.Returns.Envelope.Address() [declared]:\n" +
+        Returns + "IPostable.Address()")]
+    [InlineData("IPostable", "Label", "implemented_by",
+        "2 implementations of InterfaceShapes.Returns.IPostable.Label [declared]:\n" +
+        Returns + "Package.Label (for " + Returns + "Crate)\n" +
+        Returns + "Parcel.Label (for " + Returns + "Envelope)")]
+    [InlineData("IPostable", "get_Label", "implemented_by",
+        "2 implementations of InterfaceShapes.Returns.IPostable.get_Label() [declared]:\n" +
+        Returns + "Package.get_Label() (for " + Returns + "Crate)\n" +
+        Returns + "Parcel.get_Label() (for " + Returns + "Envelope)")]
+    [InlineData("Package", "Label", "implements",
+        "1 interface member implemented by InterfaceShapes.Returns.Package.Label [declared]:\n" +
+        Returns + "IPostable.Label (for " + Returns + "Crate)")]
+    [InlineData("Package", "get_Label", "implements",
+        "1 interface member implemented by InterfaceShapes.Returns.Package.get_Label() [declared]:\n" +
+        Returns + "IPostable.get_Label() (for " + Returns + "Crate)")]
+    [InlineData("Parcel", "Label", "implements",
+        "1 interface member implemented by InterfaceShapes.Returns.Parcel.Label [declared]:\n" +
+        Returns + "IPostable.Label (for " + Returns + "Envelope)")]
+    [InlineData("Package", "Address", "used_by",
+        "No users of InterfaceShapes.Returns.Package.Address() [declared]\n" +
+        "Implementation: code can call " + Returns + "IPostable.Address() instead; ask about that member for its uses.\n" +
+        "Override: code can call " + Returns + "Parcel.Address() instead, so only references to this override are listed; " +
+        "'call_sites' lists those calls whose receiver's type is " + Returns + "Package or derives from it.")]
+    [InlineData("Parcel", "Address", "used_by",
+        "No users of InterfaceShapes.Returns.Parcel.Address() [declared]")]
+    public async Task AClassThatListsTheInterfaceBelowSuchAnOverride_IsImplementedByTheOverride(
+        string type, string member, string kind, string expected)
+    {
+        Assert.Equal(expected, await Analyze(Returns + type, member, kind));
     }
 
     private Task<string> Analyze(string typeName, string memberName, string kind) =>

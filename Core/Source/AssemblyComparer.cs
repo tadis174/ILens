@@ -45,6 +45,12 @@ public sealed class AssemblyComparer
     /// </summary>
     private readonly bool _includeCompilerGenerated;
 
+    /// <summary>
+    /// The members whose code the comparison read where it breaks off inside an instruction, by
+    /// the name <see cref="NotComparedBrokenBodies"/> gives each, with the builds it breaks off in.
+    /// </summary>
+    private readonly Dictionary<string, (bool InA, bool InB, bool IsMethod)> _breakingOff = new(StringComparer.Ordinal);
+
     public AssemblyComparer(AssemblyHost a, AssemblyHost b, bool includeCompilerGenerated)
     {
         A = a;
@@ -807,11 +813,22 @@ public sealed class AssemblyComparer
             if (aBody == null && bBody == null) continue;
             if (aBody == null || bBody == null
                 || (generated
-                    ? A.DisassembleMethodBody(aBody) != B.DisassembleMethodBody(bBody)
+                    ? GeneratedBodiesDiffer(aBody, bBody)
                     : !HaveEqualCode(aBody, bBody)))
                 changed.Add((aBody ?? bBody).Name);
         }
         return changed;
+    }
+
+    /// <summary>
+    /// Whether a generated method matched in A and in B, compared as it stands, has other IL in
+    /// each.
+    /// </summary>
+    private bool GeneratedBodiesDiffer(IMethod a, IMethod b)
+    {
+        NoteBreaks(a, [a], inA: true);
+        NoteBreaks(b, [b], inA: false);
+        return A.DisassembleMethodBody(a) != B.DisassembleMethodBody(b);
     }
 
     /// <summary>
@@ -821,10 +838,52 @@ public sealed class AssemblyComparer
     /// </summary>
     public bool HaveEqualCode(IMethod a, IMethod b)
     {
-        var aText = UnitText(A, a);
-        var bText = UnitText(B, b);
+        var aUnit = A.MethodUnit(a);
+        var bUnit = B.MethodUnit(b);
+        NoteBreaks(a, aUnit, inA: true);
+        NoteBreaks(b, bUnit, inA: false);
+        var aText = UnitText(A, aUnit);
+        var bText = UnitText(B, bUnit);
         return aText == bText
             || GeneratedNameNormalizer.Normalize(aText) == GeneratedNameNormalizer.Normalize(bText);
+    }
+
+    /// <summary>
+    /// Notes <paramref name="method"/>, of A or of B as <paramref name="inA"/> says, where the
+    /// code of one of <paramref name="parts"/>, the bodies compared for it, breaks off inside an
+    /// instruction, since the comparison reads nothing past the break. An accessor is noted under
+    /// its property or event.
+    /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: <c>MethodBodyDisassembler</c>
+    /// disassembles a body that breaks off inside an instruction without an exception, so the
+    /// comparison answers for it. The case: BrokenBodyTests.Compare_NamesTheMethodsWhoseCodeBreaksOff_WithTheBuilds.
+    /// </remarks>
+    private void NoteBreaks(IMethod method, IEnumerable<IMethod> parts, bool inA)
+    {
+        var broken = (inA ? A : B).BodiesBreakingOff();
+        if (broken.Count == 0 || !parts.Any(part => part.MetadataToken.Kind == HandleKind.MethodDefinition
+                && broken.Contains((MethodDefinitionHandle)part.MetadataToken)))
+            return;
+        var member = (ISymbol)method.AccessorOwner ?? method;
+        var name = ReferenceFormatter.FormatSymbol(member);
+        var (noted, inB, _) = _breakingOff.GetValueOrDefault(name);
+        _breakingOff[name] = inA ? (true, inB, member is IMethod) : (noted, true, member is IMethod);
+    }
+
+    /// <summary>
+    /// The line an answer ends with for the members whose code the comparison read where it
+    /// breaks off, each with the builds it breaks off in, or null for none
+    /// (<see cref="BrokenBodies.Line"/>). It begins as the answer's other lines of what was not
+    /// compared begin.
+    /// </summary>
+    public string NotComparedBrokenBodies()
+    {
+        var names = _breakingOff
+            .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+            .Select(entry => $"{entry.Key} in {(entry.Value.InA ? entry.Value.InB ? "A and B" : "A" : "B")}")
+            .ToList();
+        return BrokenBodies.Line(names, _breakingOff.Values.All(entry => entry.IsMethod), "Not compared");
     }
 
     /// <summary>
@@ -833,7 +892,7 @@ public sealed class AssemblyComparer
     /// compiler gives generated names by position replaced.
     /// </summary>
     public static string CodeOf(AssemblyHost host, IMethod method) =>
-        GeneratedNameNormalizer.Normalize(UnitText(host, method));
+        GeneratedNameNormalizer.Normalize(UnitText(host, host.MethodUnit(method)));
 
     /// <summary>
     /// The copy of <paramref name="method"/>'s code that Burst keeps and compiles, or <c>null</c>
@@ -842,9 +901,8 @@ public sealed class AssemblyComparer
     public static IMethod BurstManagedCopyOf(AssemblyHost host, IMethod method) =>
         host.MethodUnit(method).Skip(1).FirstOrDefault(part => part.Name == method.Name + "$BurstManaged");
 
-    private static string UnitText(AssemblyHost host, IMethod method)
+    private static string UnitText(AssemblyHost host, IReadOnlyList<IMethod> parts)
     {
-        var parts = host.MethodUnit(method);
         var text = new StringBuilder();
         for (var i = 0; i < parts.Count; i++)
         {

@@ -29,13 +29,13 @@ public static class FindTypesTool
         // The question's own filters come first, so that what the two default filters leave
         // out of its matches can be counted.
         var leftOut = new LeftOut();
+        var nameFilter = NameFilter.Of(name_contains);
         var types = new List<string>();
         foreach (var t in host.TypeSystem.MainModule.TypeDefinitions)
         {
             if (byNamespace && t.Namespace != @namespace)
                 continue;
-            if (!string.IsNullOrEmpty(name_contains)
-                && !t.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase))
+            if (!nameFilter.Matches(t))
                 continue;
             if (leftOut.Admits(accessibility.Permits(t.Accessibility),
                     !include_compiler_generated && CompilerGeneratedFilter.IsCompilerGenerated(t)))

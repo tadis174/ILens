@@ -27,12 +27,11 @@ public sealed class AssemblyHost : IDisposable
     private CSharpDecompiler _positionalDecompiler;  // created on first use; guarded by _decompilerLock
     private CSharpDecompiler _fieldDecompiler;  // created on first use; guarded by _decompilerLock
     private readonly KeepOneField _keepOneField = new();  // _fieldDecompiler's pruning step
-    private DecompilerTypeSystem _methodUseTypeSystem;  // FindUsedSymbols'; created on first use; guarded by _decompilerLock
     private readonly AssemblyList _assemblyList;
     private readonly LoadedAssembly _loadedAssembly;
     private readonly PEFile _peFile;
-    private readonly UniversalAssemblyResolver _referenceSearch;
-    private readonly PathGuard _guard;
+    // Why ILSpyX's analyzers are not run on the assembly, or null where they are; see RunAnalyzer.
+    private readonly string _analyzersRefused;
     private readonly ReferenceResolver _references;
     private bool _disposed;  // guarded by _decompilerLock
 
@@ -50,6 +49,10 @@ public sealed class AssemblyHost : IDisposable
     // the first question that needs them; guarded by _decompilerLock.
     private Dictionary<MethodDefinitionHandle, Proxy> _proxies;
 
+    // The methods whose code breaks off inside an instruction (see BodiesBreakingOff); read at
+    // the first answer that needs them; guarded by _decompilerLock.
+    private IReadOnlySet<MethodDefinitionHandle> _bodiesBreakingOff;
+
     /// <summary>
     /// Type system from the LoadedAssembly — symbols from this are compatible
     /// with the ILSpyX analyzer infrastructure.
@@ -57,6 +60,21 @@ public sealed class AssemblyHost : IDisposable
     public ICompilation TypeSystem { get; }
 
     public string AssemblyPath { get; }
+
+    /// <summary>
+    /// The length and write time the assembly's file had before the host read it. A file that
+    /// changes while the host reads it therefore shows another stamp at the next call, which
+    /// gets a new host (<see cref="AssemblyHostRegistry"/>).
+    /// </summary>
+    public FileStamp FileStamp { get; }
+
+    /// <summary>
+    /// The libraries the host read as the assembly's references from under an allowed root, each
+    /// with the stamp its file had before the host read it. A build can replace such a library
+    /// while the host lives, so a library that changed gets the assembly a new host as its own
+    /// file does (<see cref="AssemblyHostRegistry"/>).
+    /// </summary>
+    public ReferenceStamps ReferenceStamps { get; }
 
     /// <summary>
     /// Whether the assembly is a reference assembly: its row carries
@@ -79,9 +97,18 @@ public sealed class AssemblyHost : IDisposable
             () => _decompiler.TypeSystem);
     private SymbolResolver _resolver;
 
-    public AssemblyHost(string assemblyPath, PathGuard guard)
+    /// <summary>
+    /// Read the assembly at <paramref name="assemblyPath"/>, whose file had
+    /// <paramref name="fileStamp"/> before, and its references, those under an allowed root through
+    /// <paramref name="images"/>. <paramref name="gone"/> names the libraries that a host this one
+    /// replaces had read and whose files were gone when it was replaced: where this host finds one
+    /// no more, it looks for it again at each call, since a build may be writing it anew.
+    /// </summary>
+    public AssemblyHost(string assemblyPath, PathGuard guard, FileStamp fileStamp, ReferenceImages images,
+        IReadOnlyList<string> gone)
     {
         AssemblyPath = Path.GetFullPath(assemblyPath);
+        FileStamp = fileStamp;
         if (!File.Exists(AssemblyPath))
             throw new FileNotFoundException($"Assembly not found: {AssemblyPath}.");
 
@@ -105,30 +132,75 @@ public sealed class AssemblyHost : IDisposable
             ?? throw new InvalidOperationException(
                 $"Failed to load PE file from {AssemblyPath}.");
         IsReferenceAssembly = CarriesReferenceMark(_peFile.Metadata);
-        // The resolver looks for a reference by its file name in the assembly's own directory,
-        // which its constructor adds, then at the top of each allow-root in the order given, and
-        // then among the installed .NET Framework libraries and in the Global Assembly Cache. For
-        // a .NET Core or .NET Standard target it looks, between the assembly's directory and the
-        // allow-roots, in the NuGet package folders a .deps.json beside the assembly names and in
-        // the installed shared runtime; a Windows Runtime reference it looks for among the Windows
-        // metadata files alone. A mod's game and engine assemblies often sit in an allow-root of their
-        // own, and without them the decompiled code has gaps and numbers where enum names belong.
-        // The search does not descend into a root: a tree holding several builds of one assembly,
-        // such as a game's older versions, would leave the choice to the order of the walk.
-        _referenceSearch = new UniversalAssemblyResolver(
-            AssemblyPath,
+        // The resolver looks for a reference by its file name next to the module that references
+        // it, then in the assembly's own directory and at the top of each allow-root in the order
+        // given. For a .NET Core or .NET Standard target it looks after them in the package folders
+        // of the dependency manifest beside the assembly and in the installed shared runtime; for
+        // every target it ends among the installed .NET Framework libraries and in the Global
+        // Assembly Cache, and a Windows Runtime reference it looks for among the Windows metadata
+        // files alone. A mod's game and engine assemblies often sit in an allow-root of their own,
+        // and without them the decompiled code has gaps and numbers where enum names belong. The
+        // search does not descend into a root: a tree holding several builds of one assembly, such
+        // as a game's older versions, would leave the choice to the order of the walk. An allow-root
+        // comes before the installed runtime, so for a .NET Core target a file of the runtime's that
+        // it finds in an old framework's folder, such as a Unity game's, is taken from the
+        // installed runtime instead (InstalledFramework).
+        // The resolver is given no file name of the assembly: with one, it would read the manifest
+        // itself and look at every folder it names, wherever it lies. DependencyManifest reads it
+        // instead and keeps the folders under a NuGet package root, and the assembly's own
+        // directory is added first, where the resolver would add it.
+        var targetFramework = _peFile.DetectTargetFrameworkId();
+        var referenceSearch = new UniversalAssemblyResolver(
+            mainAssemblyFileName: null,
             throwOnError: false,
-            _peFile.DetectTargetFrameworkId());
+            targetFramework);
+        referenceSearch.AddSearchDirectory(Path.GetDirectoryName(AssemblyPath));
         foreach (var root in guard.AllowedRoots)
-            _referenceSearch.AddSearchDirectory(root);
-        _guard = guard;
-        _references = new ReferenceResolver(_referenceSearch, guard);
+            referenceSearch.AddSearchDirectory(root);
+        var manifest = DependencyManifest.Beside(AssemblyPath, targetFramework);
+        foreach (var folder in manifest.PackageFolders)
+            referenceSearch.AddSearchDirectory(folder);
+        _analyzersRefused = NamedByNoFileName(_peFile.Metadata) is { } named
+            ? $"it names {named}, which is not a file name"
+            : manifest.LeadsOut;
+        var installedFramework = InstalledFramework.For(targetFramework, _peFile.Metadata);
+        _references = new ReferenceResolver(referenceSearch, guard, installedFramework, images);
 
-        _decompiler = new CSharpDecompiler(AssemblyPath, _references, _settings);
+        // A host that fails to be built is never closed, so the libraries it holds are let go here.
+        try
+        {
+            _decompiler = new CSharpDecompiler(AssemblyPath, _references, _settings);
+        }
+        catch
+        {
+            _references.Dispose();
+            throw;
+        }
+        ReferenceStamps = _references.Stamps(gone);
 
         // A constant or a default of this assembly that is a value of an enum another assembly
         // defines is written by the enum's member, read where the decompiler reads that assembly.
         ConstantFormatter.ReadEnumsThrough(TypeSystem.MainModule, name => FindExternalType([name]));
+    }
+
+    /// <summary>
+    /// The first reference or module file the assembly names by anything
+    /// <see cref="PathGuard.AdmitsReferenceName"/> does not admit, as an answer names it, such as
+    /// <c>a reference ..\Lib</c>, or null: the names a type system built over the assembly looks
+    /// up, as ILSpyX's analyzers build one (<see cref="RunAnalyzer"/>). Every file row counts, also
+    /// one a type system does not look up, since a file row's name must be a plain file name.
+    /// </summary>
+    private static string NamedByNoFileName(MetadataReader metadata)
+    {
+        foreach (var handle in metadata.AssemblyReferences)
+            if (metadata.GetString(metadata.GetAssemblyReference(handle).Name) is var reference
+                && !PathGuard.AdmitsReferenceName(reference))
+                return $"a reference {reference}";
+        foreach (var handle in metadata.AssemblyFiles)
+            if (metadata.GetString(metadata.GetAssemblyFile(handle).Name) is var module
+                && !PathGuard.AdmitsReferenceName(module))
+                return $"a module file {module}";
+        return null;
     }
 
     /// <summary>
@@ -236,26 +308,16 @@ public sealed class AssemblyHost : IDisposable
 
     /// <summary>
     /// The interface members that <paramref name="member"/>, a member of the inspected
-    /// assembly, implements, by the rules of <see cref="InterfaceImplementations"/>, and, where
-    /// a base type can decide the answer (<see cref="InterfaceImplementations.DependsOnBaseTypes"/>),
-    /// the base types of its class that could not be read, whose members the answer therefore
-    /// leaves out. Both are read from the decompiler's type system, since ILens's own knows the
-    /// interfaces of other assemblies by name alone. Read without <c>_decompilerLock</c>, as
-    /// <see cref="ReadExternalBases"/> is.
+    /// assembly, implements, by the rules of <see cref="InterfaceImplementations"/>, and the
+    /// types that could not be read whose members the answer therefore leaves out: base types
+    /// of its class, and those of a class below that can bind it by name
+    /// (<see cref="InterfaceImplementations.Of"/>). Both are read from the decompiler's type
+    /// system, since ILens's own knows the interfaces of other assemblies by name alone. Read
+    /// without <c>_decompilerLock</c>, as <see cref="ReadExternalBases"/> is.
     /// </summary>
     public (IReadOnlyList<InterfaceImplementations.Found> Members, IReadOnlyList<UnreadBase> Unread)
-        FindImplementedInterfaceMembers(IMember member)
-    {
-        var counterpart = (IMember)_decompiler.TypeSystem.MainModule.ResolveEntity(member.MetadataToken);
-        // An explicit implementation's own row names what it implements, and a member no base
-        // type can bind implements by its rows alone, so nothing that could not be read leaves
-        // either answer incomplete.
-        IReadOnlyList<UnreadBase> unread = counterpart.IsExplicitInterfaceImplementation
-            || !InterfaceImplementations.DependsOnBaseTypes(counterpart)
-            ? []
-            : TypeWalker.UnreadBaseTypes(counterpart.DeclaringTypeDefinition);
-        return (InterfaceImplementations.Of(counterpart), unread);
-    }
+        FindImplementedInterfaceMembers(IMember member) =>
+        InterfaceImplementations.Of((IMember)_decompiler.TypeSystem.MainModule.ResolveEntity(member.MetadataToken));
 
     /// <summary>
     /// The members that implement <paramref name="interfaceMember"/>, a member of an interface
@@ -775,17 +837,23 @@ public sealed class AssemblyHost : IDisposable
     /// it is asked for, so a pass over a large assembly leaves about 190 MB in it (measured on a
     /// game assembly of 16 MB), which on the host's own would put the process over the memory
     /// budget and have the registry close this host with everything it holds. The pass reads the
-    /// assembly through the image the host has loaded and opens the references anew, which it
-    /// closes when it ends. It writes with the host's settings, so that a line it finds is a line
-    /// of decompile's answer, in a C# 14 extension block as well, whose members own their lines
-    /// through the methods the compiler made of them (<see cref="CodeTextPass"/>).
+    /// assembly through the image the host has loaded, and its references through the files the
+    /// host's decompiler holds (<see cref="LoadedReferences"/>), so that it decompiles against the
+    /// very libraries the host's other answers come from, which its kept text is known by
+    /// (<see cref="ReferenceStamps"/>), and opens and reads nothing. It writes with the host's
+    /// settings, so that a line it finds is a line of decompile's answer, in a C# 14 extension
+    /// block as well, whose members own their lines through the methods the compiler made of them
+    /// (<see cref="CodeTextPass"/>). Those files are read by the host's decompiler under the
+    /// host's lock meanwhile, which a pass does not take: a library held in memory is read without
+    /// a lock, and one opened from outside every allowed root is read in blocks that
+    /// System.Reflection.Metadata's StreamMemoryBlockProvider maps or reads under a lock of its
+    /// own, read in System.Reflection.Metadata 10.0.
     /// </remarks>
     public void DecompileForSearch(
         IReadOnlyList<TypeDefinitionHandle> types, CodeTextStore.Search texts, CodeTextPass.Limit limit)
     {
-        using var references = new ReferenceResolver(_referenceSearch, _guard);
         var settings = CreateSettings();
-        var typeSystem = new DecompilerTypeSystem(_peFile, references, settings);
+        var typeSystem = new DecompilerTypeSystem(_peFile, new LoadedReferences(_decompiler.TypeSystem), settings);
         CodeTextPass.Run(typeSystem, settings, types, texts, limit);
     }
 
@@ -879,9 +947,10 @@ public sealed class AssemblyHost : IDisposable
     /// through the slot whichever declaration of it the compiler wrote. A C# compiler names
     /// the slot's declaration, except for a method with a type parameter of its own, where it
     /// names the nearest override the receiver's class sees, and for an override with a more
-    /// specific return type, which a call on an object of its class names; the VB and the F#
-    /// compiler name the nearest override for any method. A call that is not virtual, as
-    /// through <c>base.</c>, runs exactly the method it names and is booked under it.
+    /// specific return type, which a call on an object of its class names; the VB compiler
+    /// names the nearest override for any method, and the F# compiler in some calls. A call
+    /// that is not virtual, as through <c>base.</c> or Visual Basic's <c>MyClass</c>, runs
+    /// exactly the method it names and is booked under it.
     /// </para>
     /// </remarks>
     private List<(MethodDefinitionHandle Body, IMethod Target, int Count)> BodiesNaming(
@@ -964,8 +1033,8 @@ public sealed class AssemblyHost : IDisposable
         }
 
         // The token of the target the operand's instruction is booked under, or a nil handle for
-        // anything else: another method, or a row the metadata reader cannot decode, after which
-        // the body is read on. virtualUse says that the instruction is a virtual one.
+        // anything else: another method, or a row that cannot be decoded, after which the body is
+        // read on. virtualUse says that the instruction is a virtual one.
         EntityHandle TargetOf(EntityHandle operand, bool virtualUse)
         {
             try
@@ -1026,12 +1095,14 @@ public sealed class AssemblyHost : IDisposable
 
         // The method of this assembly a reference row names, as code names a method of a
         // generic type, or a nil handle. The name is a cheap filter, since a slot is a target
-        // and an override has its name; only a row that passes it is resolved.
+        // and an override has its name; only a row that passes it is resolved, and one that
+        // cannot be decoded names nothing (Decoding).
         EntityHandle DefinitionNamed(EntityHandle reference)
         {
             var name = metadata.GetString(metadata.GetMemberReference((MemberReferenceHandle)reference).Name);
             return targetNames.Contains(name)
-                && module.ResolveEntity(reference, default) is IMember { MemberDefinition: { } resolved }
+                && Decoding.OrNull(() => (module.ResolveEntity(reference, default) as IMember)?.MemberDefinition)
+                    is { } resolved
                 && resolved.ParentModule == module
                 && resolved.MetadataToken.Kind == HandleKind.MethodDefinition
                 ? resolved.MetadataToken
@@ -1113,8 +1184,10 @@ public sealed class AssemblyHost : IDisposable
                 }
                 catch (BadImageFormatException)
                 {
-                    // A body the metadata reader cannot decode is passed over as a whole.
-                    continue;
+                    // The body breaks off, or the metadata reader cannot decode it further. What it
+                    // names up to there counts, as in the other passes over the method bodies, and
+                    // where the code breaks off inside an instruction, the answer names the method
+                    // (BrokenBodies).
                 }
 
                 if (uses is null)
@@ -1213,9 +1286,32 @@ public sealed class AssemblyHost : IDisposable
     /// The type name of the analyzer to run, which then runs whether or not it would show the
     /// symbol; <c>null</c> runs the first analyzer under the header that shows it.
     /// </param>
+    /// <remarks>
+    /// <para>
+    /// The analyzers look for the assembly's references through a search of their own, which
+    /// ILens does not reach: it reads the dependency manifest beside the assembly and looks up
+    /// each name the assembly gives a reference or a module, before anything checks the path it
+    /// makes, and Windows connects to a computer whose share such a path names. An analyzer is
+    /// therefore not run on an assembly that names a reference or module by anything but a file
+    /// name, or whose manifest leads out of the NuGet package folders, is a link or cannot be read
+    /// (<see cref="DependencyManifest.LeadsOut"/>); the question is an error that says why.
+    /// </para>
+    /// <para>
+    /// Library behavior, read in ICSharpCode.ILSpyX 11.2.0.10050: AnalyzerScope.ConstructTypeSystem
+    /// builds a type system over LoadedAssembly.GetAssemblyResolver with loadOnDemand false, whose
+    /// MyAssemblyResolver asks GetUniversalResolver, a UniversalAssemblyResolver built with the
+    /// assembly's file name, for every reference (FindAssemblyFile) and asks File.Exists of every
+    /// module it combines with the assembly's folder (ResolveModuleAsync); it opens no file that
+    /// is not loaded already. The case: ReferenceBoundsTests.
+    /// </para>
+    /// </remarks>
     public IReadOnlyList<ISymbol> RunAnalyzer(string header, ISymbol symbol, string analyzerName = null,
         CancellationToken ct = default)
     {
+        if (_analyzersRefused is { } reason)
+            throw new InvalidOperationException(
+                $"This analysis is not run on {Path.GetFileName(AssemblyPath)}: the reference search it runs on " +
+                $"follows what the assembly names, and {reason}.");
         lock (_decompilerLock)
         {
             // Multiple analyzers can share the same header (e.g., "Used By" exists
@@ -1311,6 +1407,39 @@ public sealed class AssemblyHost : IDisposable
         return sources.TryGetValue(method.MetadataToken, out var source)
             ? module.GetDefinition((MethodDefinitionHandle)source)
             : method;
+    }
+
+    /// <summary>
+    /// The methods of the assembly whose code the IL reader cannot read to its end
+    /// (<see cref="ILens.BrokenBodies.In"/>), read at the first call and kept. Thread-safe.
+    /// </summary>
+    public IReadOnlySet<MethodDefinitionHandle> BodiesBreakingOff()
+    {
+        lock (_decompilerLock)
+            return _bodiesBreakingOff ??= ILens.BrokenBodies.In(_peFile);
+    }
+
+    /// <summary>
+    /// The line that ends an answer which read the code of <paramref name="scope"/>, or of every
+    /// method of the assembly where it is null (<see cref="ILens.BrokenBodies.Line"/>), or null
+    /// where none of them breaks off. A method is named as the answers name the members they
+    /// list: generated code under the member it was written in, and an accessor as its property
+    /// or event (<see cref="AttributeToSource"/>). Thread-safe.
+    /// </summary>
+    public string NotCheckedBrokenBodies(IEnumerable<MethodDefinitionHandle> scope = null)
+    {
+        var broken = BodiesBreakingOff();
+        if (broken.Count == 0)
+            return null;
+        var found = (scope is null ? broken : scope.Where(broken.Contains)).Distinct().ToList();
+        if (found.Count == 0)
+            return null;
+        var module = (MetadataModule)TypeSystem.MainModule;
+        var members = AttributeToSource(found.Select(handle => (ISymbol)module.GetDefinition(handle)).ToList());
+        var name = ReferenceFormatter.NamesFor(members);
+        var named = members.GroupBy(name).OrderBy(member => member.Key, StringComparer.Ordinal).ToList();
+        return ILens.BrokenBodies.Line(named.Select(member => member.Key).ToList(),
+            named.All(member => member.All(symbol => symbol is IMethod)));
     }
 
     /// <summary>
@@ -1474,22 +1603,23 @@ public sealed class AssemblyHost : IDisposable
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The scan resolves in a type system of its own, built at the first call and kept, over
-    /// the reference files the decompiler's type system holds (<see cref="LoadedReferences"/>).
-    /// A member of a referenced assembly found there prints with what only its definition
-    /// says, such as <c>out</c> for a parameter, wherever the reference search found the
-    /// assembly. The results are read after the call without <c>_decompilerLock</c>, as
-    /// <see cref="ReadExternalBases"/> reads the decompiler's type system.
+    /// The scan resolves in the decompiler's type system, over the reference files its search
+    /// found, so a member of a referenced assembly prints with what only its definition says,
+    /// such as <c>out</c> for a parameter, wherever the reference search found the assembly.
+    /// The results are read after the call without <c>_decompilerLock</c>, as
+    /// <see cref="ReadExternalBases"/> reads that type system.
     /// </para>
     /// <para>
-    /// The decompiler's own type system reads by the rules of the C# version the decompiler
-    /// writes (<see cref="CreateSettings"/>), this one by the default rules. A parameter's
-    /// keyword depends on neither, since <see cref="ParameterPassing"/> takes it from the
-    /// metadata row. Whether the scan would answer alike in the decompiler's type system,
-    /// which would save keeping this one, is not measured: one answer that differs over an
-    /// assembly compiled with a newer C# version would show that it does not. A type system
-    /// built for each call does not serve: it answers the same and took four times as long
-    /// over a large assembly, 101 s against 24 s for 9,130 calls (measured 2026-10-11).
+    /// That type system reads by the rules of the C# version the decompiler writes
+    /// (<see cref="CreateSettings"/>), which in ICSharpCode.Decompiler 11.2 differ from a type
+    /// system's default rules only in first-class span conversions, and a parameter's keyword
+    /// depends on neither, since <see cref="ParameterPassing"/> takes it from the metadata row.
+    /// A type system of the scan's own with the default rules, built at the first call and
+    /// kept, answers alike: in each of 111,752 calls on methods and properties over nine
+    /// assemblies, among them System.Private.CoreLib 10.0.15 and a game's main assembly, and it
+    /// cost 2.6 to 2.7 MB on the latter (measured 2026-11-13).
+    /// One built for each call answers the same and took four times as long over a large
+    /// assembly, 101 s against 24 s for 9,130 calls (measured 2026-10-11).
     /// </para>
     /// </remarks>
     public IReadOnlyList<ISymbol> FindUsedSymbols(IMethod method)
@@ -1498,16 +1628,26 @@ public sealed class AssemblyHost : IDisposable
             return [];
 
         lock (_decompilerLock)
+            return MethodUseScanner.Scan(_decompiler.TypeSystem.MainModule, BodiesReadForUses(method));
+    }
+
+    /// <summary>
+    /// The method bodies <see cref="FindUsedSymbols"/> reads for <paramref name="method"/>: its
+    /// parts, and each proxy they call, which is read with them since the call it passes on is
+    /// one the method's source writes. None for a method of another assembly. Thread-safe.
+    /// </summary>
+    public IReadOnlyList<MethodDefinitionHandle> BodiesReadForUses(IMethod method)
+    {
+        if (method.ParentModule != TypeSystem.MainModule || method.MetadataToken.Kind != HandleKind.MethodDefinition)
+            return [];
+
+        lock (_decompilerLock)
         {
-            _methodUseTypeSystem ??= new DecompilerTypeSystem(_peFile, new LoadedReferences(_decompiler.TypeSystem));
-            // A proxy the method's code calls is read with it: the call it passes on is one
-            // the method's source writes.
             var parts = MethodParts(method).Select(part => (MethodDefinitionHandle)part.MetadataToken).ToList();
             var passedOn = Proxies()
                 .Where(proxy => !parts.Contains(proxy.Key) && proxy.Value.Callers.Any(calling => parts.Contains(calling.Body)))
-                .Select(proxy => proxy.Key)
-                .ToList();
-            return MethodUseScanner.Scan(_methodUseTypeSystem.MainModule, parts.Concat(passedOn));
+                .Select(proxy => proxy.Key);
+            return [.. parts, .. passedOn];
         }
     }
 
@@ -2242,7 +2382,7 @@ public sealed class AssemblyHost : IDisposable
                         && resolved.MemberDefinition.MetadataToken == definition
                         && resolved.ParentModule == module;
                 }
-                catch (Exception e) when (e is BadImageFormatException or ArgumentException)
+                catch (Exception e) when (Decoding.Failed(e))
                 {
                     return false;
                 }
@@ -2384,7 +2524,8 @@ public sealed class AssemblyHost : IDisposable
     /// Release every file this host opened: each assembly in ILSpyX's list, read whole into
     /// memory, which is the inspected one alone, since the ILSpyX analyzers ILens runs look a
     /// reference up in the list without loading it; the decompiler's own copy of the inspected
-    /// assembly; and each referenced assembly the decompiler resolved. Called by
+    /// assembly; and each referenced assembly the decompiler resolved, or the host's hold on it
+    /// where it lies under an allowed root (<see cref="ReferenceImages"/>). Called by
     /// <see cref="AssemblyHostRegistry"/> once it closes the host, which it does only while no
     /// call holds it. Idempotent — a second Dispose call is a no-op.
     /// Calling tool methods on a disposed host is a programming error.
@@ -2404,26 +2545,59 @@ public sealed class AssemblyHost : IDisposable
 
     /// <summary>
     /// Resolves the assembly's references for the decompiler where the inner resolver finds them,
-    /// opening a file only when <see cref="PathGuard.AdmitsReference"/> admits it, and records
-    /// every file it opens, so that <see cref="Dispose"/> can close them. The decompiler resolves
+    /// asking it only for a name <see cref="PathGuard.AdmitsReferenceName"/> admits and taking a
+    /// file only when <see cref="PathGuard.AdmitsReference"/> admits it. A file under an allowed
+    /// root is taken from <paramref name="images"/>, which holds it in memory, and its stamp is
+    /// recorded (<see cref="Stamps"/>); any other file is opened as the inner resolver opens one.
+    /// <see cref="Dispose"/> lets go of both, and nothing else closes them. The decompiler resolves
     /// the assembly's references when it is built, with the assemblies that the type forwarders
-    /// of each file it finds point to, but not those files' own references, and maps each file
-    /// it finds, and nothing else closes them.
+    /// of each file it finds point to, but not those files' own references. Where
+    /// <paramref name="framework"/> takes a file of the installed runtime in place of the one the
+    /// inner resolver found, that file is taken instead.
     /// </summary>
-    private sealed class ReferenceResolver(UniversalAssemblyResolver inner, PathGuard guard)
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: UniversalAssemblyResolver
+    /// opens a file it resolves through a FileStream that shares the file for reading alone, under
+    /// a PEFile with PEStreamOptions.Default, which keeps the stream open for lazy reads, as Load
+    /// here does, so such a file stays open until the host is closed, and Windows refuses to write
+    /// over it meanwhile. A file outside every allowed root is opened so, since no project's build
+    /// writes over it; one under an allowed root is held in memory instead, so that a build can
+    /// replace it while the host lives, and the registry compares it with its file at every call.
+    /// The case: AfterALibraryItReferencesWasReplaced_TheSameServer_AnswersFromTheNewBuild in
+    /// RebuiltAssemblyTests, whose copy over the library fails where it is opened as the inner
+    /// resolver opens it.
+    /// </remarks>
+    private sealed class ReferenceResolver(
+        UniversalAssemblyResolver inner, PathGuard guard, InstalledFramework framework, ReferenceImages images)
         : IAssemblyResolver, IDisposable
     {
-        private readonly List<MetadataFile> _opened = new();
+        private readonly List<MetadataFile> _opened = new();  // guards itself, _held and _disposed
+        private readonly List<ReferenceImages.Hold> _held = new();
+        private bool _disposed;
 
-        public MetadataFile Resolve(IAssemblyReference reference) =>
-            Open(() => inner.FindAssemblyFile(reference), () => inner.Resolve(reference));
+        public MetadataFile Resolve(IAssemblyReference reference)
+        {
+            if (!PathGuard.AdmitsReferenceName(reference.Name))
+                return null;
+            string installed = null;
+            return Open(
+                () =>
+                {
+                    var found = inner.FindAssemblyFile(reference);
+                    installed = framework?.InPlaceOf(reference, found);
+                    return installed ?? found;
+                },
+                () => installed is null ? inner.Resolve(reference) : Load(installed));
+        }
 
         public MetadataFile ResolveModule(MetadataFile mainModule, string moduleName) =>
-            Open(
-                () => Path.GetDirectoryName(mainModule.FileName) is { } directory
-                    ? Path.Combine(directory, moduleName)
-                    : null,
-                () => inner.ResolveModule(mainModule, moduleName));
+            PathGuard.AdmitsReferenceName(moduleName)
+                ? Open(
+                    () => Path.GetDirectoryName(mainModule.FileName) is { } directory
+                        ? Path.Combine(directory, moduleName)
+                        : null,
+                    () => inner.ResolveModule(mainModule, moduleName))
+                : null;
 
         public Task<MetadataFile> ResolveAsync(IAssemblyReference reference) =>
             Task.Run(() => Resolve(reference));
@@ -2434,17 +2608,33 @@ public sealed class AssemblyHost : IDisposable
         public IDisposable BeginSnapshot() => inner.BeginSnapshot();
 
         /// <summary>
-        /// The file <paramref name="find"/> names, opened by <paramref name="open"/> when
-        /// <see cref="PathGuard.AdmitsReference"/> admits it. A file the process may not read
-        /// leaves the reference unresolved, as the inner resolver leaves one it cannot open or
-        /// parse: the decompiler does not catch what a resolver throws, so the exception would
-        /// stop the host from being built and fail every tool on the assembly.
+        /// The file <paramref name="find"/> names, when <see cref="PathGuard.AdmitsReference"/>
+        /// admits it: taken from the images where it lies under an allowed root, and otherwise
+        /// opened by <paramref name="open"/>. A file the process may not read leaves the reference
+        /// unresolved, as the inner resolver leaves one it cannot open or parse: the decompiler
+        /// does not catch what a resolver throws, so the exception would stop the host from being
+        /// built and fail every tool on the assembly.
         /// </summary>
         private MetadataFile Open(Func<string> find, Func<MetadataFile> open)
         {
             try
             {
-                return find() is { } file && guard.AdmitsReference(file) ? Track(open()) : null;
+                if (find() is not { } file || !guard.AdmitsReference(file))
+                    return null;
+                if (!guard.Covers(file))
+                    return Track(open());
+                if (images.Take(file) is not { } hold)
+                    return null;
+                lock (_opened)
+                {
+                    if (!_disposed)
+                    {
+                        _held.Add(hold);
+                        return hold.Library;
+                    }
+                }
+                hold.Dispose();
+                return null;
             }
             catch (UnauthorizedAccessException)
             {
@@ -2452,21 +2642,178 @@ public sealed class AssemblyHost : IDisposable
             }
         }
 
+        /// <summary>
+        /// The libraries this resolver took from under an allowed root, each with the stamp its
+        /// file had before it was read, also one that could not be read, and without a stamp each
+        /// of <paramref name="gone"/> it did not take, whose file was gone when the host it serves
+        /// replaced the host that had read it.
+        /// </summary>
+        public ReferenceStamps Stamps(IReadOnlyList<string> gone)
+        {
+            lock (_opened)
+                return new ReferenceStamps(_held.Select(hold => (hold.Path, hold.Stamp))
+                    .Concat(gone.Select(path => (path, (FileStamp?)null))));
+        }
+
+        /// <summary>
+        /// The file at <paramref name="path"/>, opened as the inner resolver opens a file it finds:
+        /// one it cannot read or parse leaves the reference unresolved.
+        /// </summary>
+        private static MetadataFile Load(string path)
+        {
+            FileStream stream = null;
+            try
+            {
+                stream = new FileStream(path, FileMode.Open, FileAccess.Read);
+                return new PEFile(path, stream, System.Reflection.PortableExecutable.PEStreamOptions.Default,
+                    MetadataReaderOptions.Default);
+            }
+            catch (Exception e) when (e is BadImageFormatException or IOException)
+            {
+                stream?.Dispose();
+                return null;
+            }
+        }
+
+        // A file opened after Dispose, by a resolution still running when the decompiler that
+        // started it failed, is closed at once.
         private MetadataFile Track(MetadataFile file)
         {
-            if (file is not null)
-                lock (_opened)
+            if (file is null)
+                return null;
+            lock (_opened)
+            {
+                if (!_disposed)
+                {
                     _opened.Add(file);
-            return file;
+                    return file;
+                }
+            }
+            (file as IDisposable)?.Dispose();
+            return null;
         }
 
         public void Dispose()
         {
             lock (_opened)
             {
+                _disposed = true;
                 foreach (var file in _opened)
                     (file as IDisposable)?.Dispose();
                 _opened.Clear();
+                foreach (var hold in _held)
+                    hold.Dispose();
+                _held.Clear();
+            }
+        }
+    }
+
+    /// <summary>
+    /// For an assembly built for .NET Core or .NET 5 and later, the installed runtime's file to take
+    /// in place of one the reference search found in an old framework's folder: one that holds a
+    /// framework's core library, mscorlib.dll or System.Private.CoreLib.dll, but no .NET runtime as
+    /// new as the assembly's, such as a Unity game's library folder or the .NET Framework's own.
+    /// Such a folder's System.Runtime.dll is an old one that lacks classes a modern assembly names
+    /// through it, such as AssemblyName and BindingFlags, and its netstandard.dll leads to its own
+    /// mscorlib, so an assembly read against it is partly unresolved: its decompiled code writes
+    /// numbers for flags and casts the code does not need, its inherited members are the old
+    /// framework's, and a member loses the interface member it implements where the interface
+    /// names a parameter's class through netstandard. The installed runtime's file is the one the
+    /// search finds without the folder. A folder without a core library, such as a
+    /// framework-dependent application's, keeps the search's choice, since the libraries it ships,
+    /// such as System.Text.Json, can be newer than the installed runtime's; so does a file the
+    /// installed runtime does not hold, such as a game's own, and every file of an assembly built
+    /// for another target: one built for .NET Standard runs on either kind of framework and reads
+    /// consistently against each.
+    /// </summary>
+    /// <remarks>
+    /// A folder holds a runtime as new as the assembly's where it holds System.Private.CoreLib.dll
+    /// and a System.Runtime.dll whose version is at least the highest one the assembly references,
+    /// as the installed runtime's own folder, a self-contained application's and the folder of a
+    /// game that runs on .NET do; for an assembly that references no System.Runtime,
+    /// System.Private.CoreLib.dll alone.
+    ///
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050:
+    /// for a .NET Core target UniversalAssemblyResolver looks in its search directories, the
+    /// assembly's own and the allow-roots, before the installed shared runtime
+    /// (DotNetCorePathFinder.TryResolveDotNetCore), and DotNetCorePathFinder.TryResolveDotNetCoreShared
+    /// finds the runtime's file in the version folder that search takes. The case: ModernUser in
+    /// FrameworkTests.
+    /// </remarks>
+    private sealed class InstalledFramework
+    {
+        private readonly Version _runtimeReferenced;
+        private readonly Lazy<DotNetCorePathFinder> _installed;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _oldFrameworks =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private InstalledFramework(Version runtimeReferenced, TargetFrameworkIdentifier identifier, Version version)
+        {
+            _runtimeReferenced = runtimeReferenced;
+            _installed = new Lazy<DotNetCorePathFinder>(
+                () => new DotNetCorePathFinder(identifier, version, "Microsoft.NETCore.App"));
+        }
+
+        /// <summary>
+        /// The rule for an assembly with the target <paramref name="targetFramework"/>, as
+        /// DetectTargetFrameworkId writes it, or null for a target that is not .NET Core. The
+        /// target is read as UniversalAssemblyResolver reads it, which takes one without a version
+        /// for the .NET Framework.
+        /// </summary>
+        public static InstalledFramework For(string targetFramework, MetadataReader metadata)
+        {
+            var parts = (targetFramework ?? "").Split(',');
+            if (!parts[0].Trim().Equals(".NETCoreApp", StringComparison.OrdinalIgnoreCase))
+                return null;
+            Version version = null;
+            foreach (var part in parts.Skip(1))
+            {
+                var pair = part.Trim().Split('=');
+                if (pair.Length == 2 && pair[0].Trim().Equals("Version", StringComparison.OrdinalIgnoreCase)
+                    && Version.TryParse(pair[1].TrimStart('v', 'V', ' ', '\t'), out var parsed))
+                    version = new Version(parsed.Major, parsed.Minor, Math.Max(parsed.Build, 0));
+            }
+            if (version is null || version.Major == 0)
+                return null;
+
+            var runtimeReferenced = metadata.AssemblyReferences
+                .Select(metadata.GetAssemblyReference)
+                .Where(reference => metadata.StringComparer.Equals(reference.Name, "System.Runtime"))
+                .Select(reference => reference.Version)
+                .DefaultIfEmpty()
+                .Max();
+            var identifier = version.Major >= 5 ? TargetFrameworkIdentifier.NET : TargetFrameworkIdentifier.NETCoreApp;
+            return new InstalledFramework(runtimeReferenced, identifier, version);
+        }
+
+        /// <summary>
+        /// The installed runtime's file for <paramref name="reference"/> where it takes the place of
+        /// <paramref name="found"/>, the file the reference search found, or null where that stands.
+        /// </summary>
+        public string InPlaceOf(IAssemblyReference reference, string found) =>
+            found is not null && Path.GetDirectoryName(found) is { } directory
+                && _oldFrameworks.GetOrAdd(directory, IsOldFramework)
+                ? _installed.Value.TryResolveDotNetCoreShared(reference, out _)
+                : null;
+
+        /// <summary>
+        /// Whether <paramref name="directory"/> holds a framework's core library but no runtime as
+        /// new as the assembly's, as the remarks of the class say.
+        /// </summary>
+        private bool IsOldFramework(string directory)
+        {
+            if (!File.Exists(Path.Combine(directory, "System.Private.CoreLib.dll")))
+                return File.Exists(Path.Combine(directory, "mscorlib.dll"));
+            if (_runtimeReferenced is null)
+                return false;
+            try
+            {
+                return System.Reflection.AssemblyName.GetAssemblyName(Path.Combine(directory, "System.Runtime.dll"))
+                    .Version is not { } held || held < _runtimeReferenced;
+            }
+            catch (Exception e) when (e is IOException or BadImageFormatException or UnauthorizedAccessException)
+            {
+                return true;
             }
         }
     }

@@ -68,7 +68,7 @@ public sealed class GlobalAttributeTarget : ISymbol
                 var constructor = metadata.GetCustomAttribute(handle).Constructor;
                 return type.Equals(module.ResolveMethod(constructor, default)?.DeclaringType.GetDefinition());
             }
-            catch (Exception e) when (e is BadImageFormatException or ArgumentException)
+            catch (Exception e) when (Decoding.Failed(e))
             {
                 return false;
             }

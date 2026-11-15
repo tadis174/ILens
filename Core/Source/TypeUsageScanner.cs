@@ -414,7 +414,7 @@ public sealed class TypeUsageScanner
                     typeParameterCount = signature.GenericParameterCount;
                     called = _inReferences?.ResolveMethod(group.Value.Rows[0], default);
                 }
-                catch (Exception e) when (e is BadImageFormatException or ArgumentException)
+                catch (Exception e) when (Decoding.Failed(e))
                 {
                     // Printed without parameters; still reachable by name.
                 }
@@ -691,8 +691,9 @@ public sealed class TypeUsageScanner
     private static ISymbol SymbolOf(IMethod method) => (ISymbol)method.AccessorOwner ?? method;
 
     /// <summary>
-    /// Runs a check that decodes metadata, answering false for metadata the reader cannot
-    /// decode, or whose type arguments ILSpy's type system rejects as inconsistent.
+    /// Runs a check that decodes metadata, answering false for metadata that cannot be decoded
+    /// (<see cref="Decoding"/>), such as type arguments ILSpy's type system rejects as
+    /// inconsistent.
     /// </summary>
     private static bool Safely(Func<bool> check)
     {
@@ -700,7 +701,7 @@ public sealed class TypeUsageScanner
         {
             return check();
         }
-        catch (Exception e) when (e is BadImageFormatException or ArgumentException)
+        catch (Exception e) when (Decoding.Failed(e))
         {
             return false;
         }

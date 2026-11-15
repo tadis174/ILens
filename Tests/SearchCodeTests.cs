@@ -476,20 +476,24 @@ public sealed class SearchCodeTests : IClassFixture<ILensServerFixture>
         Assert.StartsWith("13 lines matching ", await CallToolText(client, "search_code", Arguments(Marker)));
     }
 
-    // A text is kept for the file it was decompiled from. Under a 1 MB budget every host is
-    // closed when its call ends, which frees the file to be replaced. The next search has to
-    // answer for the new file, in which nothing calls Marker.Hit.
-    [Fact]
-    public async Task AFileThatChanged_IsDecompiledAnew()
+    // A text is kept for the version of the file it was decompiled from. The file is replaced
+    // between two searches, as a project's rebuild replaces a library, while the server holds
+    // the host that read it, or after a 1 MB budget closed that host when its call ended. The
+    // next search has to answer for the new file, in which nothing calls Marker.Hit.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFileThatChanged_IsDecompiledAnew(bool budgetClosesTheHost)
     {
         string root = Directory.CreateDirectory(
             Path.Combine(Path.GetTempPath(), "ILens-search-" + Guid.NewGuid().ToString("N"))).FullName;
         string target = Path.Combine(root, "Target.dll");
         File.Copy(FixturePath("SearchText.dll"), target);
+        string[] options = budgetClosesTheHost ? ["--max-total-size", "1"] : [];
 
         try
         {
-            await using (var client = await StartServer("ILens-search-changed", root, "--max-total-size", "1"))
+            await using (var client = await StartServer("ILens-search-changed", root, options))
             {
                 var arguments = new Dictionary<string, object?> { ["assembly"] = target, ["regex"] = Marker };
                 Assert.StartsWith("13 lines matching ", await CallToolText(client, "search_code", arguments));
@@ -497,6 +501,39 @@ public sealed class SearchCodeTests : IClassFixture<ILensServerFixture>
                 File.Copy(FixturePath("CallShapes.dll"), target, overwrite: true);
 
                 Assert.Equal(@"No lines matching Marker\.Hit\(", await CallToolText(client, "search_code", arguments));
+            }
+        }
+        finally
+        {
+            await ILensServerFixture.DeleteWhenReleased(root);
+        }
+    }
+
+    // Shop.Derived.Pick returns the Parts.Shade of value 2, which Parts.dll beside Shop.dll names
+    // Green and its rebuild names Lime (RebuiltReferenceAssembly). The text kept from the first
+    // search names Green, so once the rebuild was copied over Parts.dll, the next search has to
+    // decompile Shop.dll anew: after the host that read the build before, or after a 1 MB budget
+    // closed that host when its call ended and the next call built one on the unchanged Shop.dll.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFileWhoseReferenceChanged_IsDecompiledAnew(bool budgetClosesTheHost)
+    {
+        string root = Directory.CreateDirectory(
+            Path.Combine(Path.GetTempPath(), "ILens-search-" + Guid.NewGuid().ToString("N"))).FullName;
+        string[] options = budgetClosesTheHost ? ["--max-total-size", "1"] : [];
+
+        try
+        {
+            string shop = RebuiltReferenceAssembly.Write(root);
+            await using (var client = await StartServer("ILens-search-reference", root, options))
+            {
+                var arguments = new Dictionary<string, object?> { ["assembly"] = shop, ["regex"] = @"Shade\.Green" };
+                Assert.StartsWith("1 line matching ", await CallToolText(client, "search_code", arguments));
+
+                File.Copy(RebuiltReferenceAssembly.WriteRebuild(root), Path.Combine(root, "Parts.dll"), overwrite: true);
+
+                Assert.Equal(@"No lines matching Shade\.Green", await CallToolText(client, "search_code", arguments));
             }
         }
         finally

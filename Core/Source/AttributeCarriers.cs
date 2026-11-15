@@ -124,7 +124,7 @@ public static class AttributeCarriers
         {
             return test(attribute);
         }
-        catch (Exception e) when (e is BadImageFormatException or ArgumentException)
+        catch (Exception e) when (Decoding.Failed(e))
         {
             return false;
         }

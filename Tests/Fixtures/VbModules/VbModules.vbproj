@@ -3,11 +3,13 @@
   <!--
     Test-only fixture, in Visual Basic: a module that declares extension methods, which the
     compiler writes into a sealed class that is not static, a class with an event and an
-    auto-implemented property, for which the compiler adds fields, a call through MyClass, which
-    calls an override without virtual dispatch, and a property C# cannot declare, one that takes a
-    parameter and is not its class's default. Not consumed by Tests' source code;
-    only its compiled output is inspected by the ILens server during the e2e suite. The empty
-    root namespace keeps the namespace the source declares as the whole namespace.
+    auto-implemented property, for which the compiler adds fields, calls through MyClass, which
+    call an override without virtual dispatch, classes that override framework members, with a
+    caller of each form of call, each naming the override itself, and a property C# cannot
+    declare, one that takes a parameter and is not its class's default. Not consumed by Tests'
+    source code; only its compiled output is inspected by the ILens server during the e2e
+    suite. The empty root namespace keeps the namespace the source declares as the whole
+    namespace.
   -->
 
   <PropertyGroup>

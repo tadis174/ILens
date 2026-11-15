@@ -9,6 +9,7 @@ namespace ILens;
 public static class CallSiteReport
 {
     private static readonly Noun Call = Noun.Regular("call");
+    private static readonly Noun Argument = Noun.Regular("argument");
     private static readonly Noun AttributeUse = Noun.Regular("use");
     private static readonly Noun Member = Noun.Regular("member");
 
@@ -105,6 +106,13 @@ public static class CallSiteReport
         // The finder orders the calls by caller, so those of one caller stand together.
         var sb = new StringBuilder(header).Append(ListOutput.Grouped(
             calls.Select(call => (result.CallerName(call.Caller), Passed(call))).ToList(), limit));
+
+        // A shortened line could otherwise read as the whole call.
+        var shortened = calls.Take(ListOutput.Shown(calls.Count, limit))
+            .Count(call => byParameter ? ArgumentFor(call, parameterName).Shortened : call.Shortened);
+        if (shortened > 0)
+            sb.Append($"\nShortened: {(byParameter ? Argument : Call).Count(shortened)} longer than " +
+                $"{CallSiteFinder.LineLength} characters; ... marks the code left out");
 
         sb.Append(FormatShortfalls(result.Shortfalls, result.CallerName, limit)).Append(routes).Append(notShownAsAttribute);
 

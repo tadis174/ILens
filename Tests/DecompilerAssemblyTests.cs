@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reflection;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -653,32 +654,55 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
     [Fact]
     public async Task GetOrLoad_ClosesAssembliesWhenACallEndsOverTheMemoryBudget()
     {
-        // Loading an assembly makes the decompiler open the assemblies it references from the
-        // same directory, and closing the host must close them again. Each server gets its own
-        // copy of ExternalUser.dll beside its reference ExternalLib.dll. Under the default budget
-        // the host stays cached after the call, so the reference stays open, which shows the
-        // check can fail at all. Under a 1 MB budget, below what ILens needs with nothing open,
-        // every host is closed when its call ends, so the reference is free once the call has
-        // answered, and the next call on the assembly opens it again and answers alike.
+        // Loading an assembly makes the decompiler read the assemblies it references from the
+        // same directory, and closing the host must let go of them again. The server's log names
+        // each assembly it loads or closes and each reference it reads into memory, which it does
+        // not read again while a host still holds it. Each server gets its own copy of
+        // ExternalUser.dll beside its reference ExternalLib.dll, is asked about ExternalUser.dll
+        // twice and then about ExternalLib.dll, whose line marks where the lines of the first two
+        // calls end. Under the default budget the host stays cached after the call, so the second
+        // call reads nothing, which shows the check can fail at all. Under a 1 MB budget, below
+        // what ILens needs with nothing open, every host is closed when its call ends, and with it
+        // the reference it held, so the next call on the assembly reads both again and answers
+        // alike.
         string root = Path.Combine(Path.GetTempPath(), "ILens-budget-" + Guid.NewGuid().ToString("N"));
         string cached = CopyUserAndReference("Cached");
         string closed = CopyUserAndReference("Closed");
 
         try
         {
-            await using (var client = await StartServer("ILens-budget-default", root))
+            var cachedLog = new ConcurrentQueue<string>();
+            await using (var client = await StartServer("ILens-budget-default", root, cachedLog.Enqueue))
             {
                 await FindTypes(client, Path.Combine(cached, "ExternalUser.dll"));
-                Assert.False(CanOpenExclusively(Path.Combine(cached, "ExternalLib.dll")),
-                    "The reference should be open while its host is cached.");
+                await FindTypes(client, Path.Combine(cached, "ExternalUser.dll"));
+                await FindTypes(client, Path.Combine(cached, "ExternalLib.dll"));
+                string[] expected =
+                [
+                    "read reference ExternalLib.dll",
+                    "loaded ExternalUser.dll",
+                    "loaded ExternalLib.dll",
+                ];
+                Assert.Equal(expected, await ILensServerFixture.HostLines(cachedLog, until: "loaded ExternalLib.dll"));
             }
 
-            await using (var client = await StartServer("ILens-budget-tight", root, "--max-total-size", "1"))
+            var closedLog = new ConcurrentQueue<string>();
+            await using (var client = await StartServer("ILens-budget-tight", root, closedLog.Enqueue, "--max-total-size", "1"))
             {
                 string first = await FindTypes(client, Path.Combine(closed, "ExternalUser.dll"));
-                Assert.True(CanOpenExclusively(Path.Combine(closed, "ExternalLib.dll")),
-                    "The host should have been closed when its call ended, and with it the reference it opened.");
                 Assert.Equal(first, await FindTypes(client, Path.Combine(closed, "ExternalUser.dll")));
+                await FindTypes(client, Path.Combine(closed, "ExternalLib.dll"));
+                string[] expected =
+                [
+                    "read reference ExternalLib.dll",
+                    "loaded ExternalUser.dll",
+                    "closed ExternalUser.dll (over memory budget)",
+                    "read reference ExternalLib.dll",
+                    "loaded ExternalUser.dll",
+                    "closed ExternalUser.dll (over memory budget)",
+                    "loaded ExternalLib.dll",
+                ];
+                Assert.Equal(expected, await ILensServerFixture.HostLines(closedLog, until: "loaded ExternalLib.dll"));
             }
         }
         finally
@@ -695,12 +719,14 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             return dir;
         }
 
-        static async Task<McpClient> StartServer(string name, string root, params string[] options) =>
+        static async Task<McpClient> StartServer(
+            string name, string root, Action<string> errorLines, params string[] options) =>
             await ILensServerFixture.ConnectAsync(new StdioClientTransport(new StdioClientTransportOptions
             {
                 Name = name,
                 Command = ILensServerFixture.ResolveILensExecutable(),
                 Arguments = ["--allow-root", root, .. options],
+                StandardErrorLines = errorLines,
             }));
 
         static async Task<string> FindTypes(McpClient client, string assembly)
@@ -710,19 +736,6 @@ public sealed class DecompilerAssemblyTests : IClassFixture<ILensServerFixture>
             string text = string.Join("\n", result.Content.OfType<TextContentBlock>().Select(b => b.Text));
             Assert.True(result.IsError != true, text);
             return text;
-        }
-
-        static bool CanOpenExclusively(string path)
-        {
-            try
-            {
-                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
-                return true;
-            }
-            catch (IOException)
-            {
-                return false;
-            }
         }
     }
 

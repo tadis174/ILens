@@ -152,8 +152,8 @@ public sealed class NamedArgumentScan
         {
             named = _reader.NamedArgumentsOf(attribute);
         }
-        // An attribute the reader cannot decode sets nothing it can name.
-        catch (Exception e) when (e is BadImageFormatException or ArgumentException)
+        // An attribute that cannot be decoded sets nothing it can name.
+        catch (Exception e) when (Decoding.Failed(e))
         {
             named = AttributeArgumentReader.NamedArguments.None;
         }
@@ -177,11 +177,11 @@ public sealed class NamedArgumentScan
         {
             found = TypeWalker.FindSetByName(_references.ResolveType(attributeClass, default), name, _isTheClass);
         }
-        // A class the metadata reader cannot decode, or whose type arguments ILSpy's type
-        // system rejects as inconsistent, sets nothing that can be named. Every question
+        // A class that cannot be decoded (Decoding), such as one whose type arguments ILSpy's
+        // type system rejects as inconsistent, sets nothing that can be named. Every question
         // about a member of another assembly's type walks every attribute's class, so one
         // such row would otherwise end them all.
-        catch (Exception e) when (e is BadImageFormatException or ArgumentException)
+        catch (Exception e) when (Decoding.Failed(e))
         {
             return (Reach.DoesNot, null);
         }

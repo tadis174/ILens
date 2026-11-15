@@ -49,13 +49,14 @@ public static class ListMembersTool
         // Only a static class declares blocks, and it inherits none.
         var extensions = type.ExtensionInfo;
 
+        var nameFilter = NameFilter.Of(name_contains);
+
         // A constructor is listed under its type's name, so the filter finds it by that name as
         // well as by its own, .ctor or .cctor, which the other tools print and take.
         bool NameMatches(IEntity entity) =>
-            string.IsNullOrEmpty(name_contains)
-            || entity.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase)
+            nameFilter.Matches(entity)
             || (entity is IMethod { IsConstructor: true, DeclaringTypeDefinition: { } declaring }
-                && declaring.Name.Contains(name_contains, StringComparison.OrdinalIgnoreCase));
+                && nameFilter.Matches(declaring));
 
         // Each group is titled by its full count, which a group the limit cuts keeps.
         List<(string Title, List<string> Lines)> Groups(AccessibilityFilter visible, bool withGenerated)

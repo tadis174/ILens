@@ -20,9 +20,16 @@ namespace ILens;
 /// the assembly being searched, the types outside the scope of the one call that is searching
 /// it. A scope that does not fit by itself is an error.
 ///
-/// A text is kept for a file as it was when it was decompiled, known by its length and write
-/// time. A host maps its file, which keeps the file from being replaced, so a file can only
-/// change while its host is closed, and the next search then finds the difference here.
+/// A text is kept for the version of the file it was decompiled from, known by the
+/// <see cref="FileStamp"/> the decompiling host read the file with, and not by the file's stamp at
+/// the time of the search: a file replaced between a search's lookup of its host and its hold on
+/// the text would otherwise keep the old host's text under the new file's stamp. It is kept as
+/// well for the versions of the libraries that host read as references from under an allowed
+/// root (<see cref="ReferenceStamps"/>), since the text writes what it reads of them, such as the
+/// name of an enum's member where the code holds its value. The registry gives a file that
+/// changed, or whose such reference changed, a new host, whose first search drops the text kept
+/// for the old versions, while a host closed for the budget and built again on unchanged files
+/// finds its text kept.
 /// </remarks>
 public sealed class CodeTextStore(long maxBytes)
 {
@@ -37,21 +44,24 @@ public sealed class CodeTextStore(long maxBytes)
     /// <summary>
     /// The hold one search_code call has on the texts of the assembly at
     /// <paramref name="assemblyPath"/>, a normalized path, for the top-level types in
-    /// <paramref name="scope"/>. A text kept for an earlier version of the file is dropped first.
+    /// <paramref name="scope"/>, as the host the call decompiles with read the file and its
+    /// references: <paramref name="stamp"/> is that host's <see cref="AssemblyHost.FileStamp"/>
+    /// and <paramref name="references"/> its <see cref="AssemblyHost.ReferenceStamps"/>. A text
+    /// kept for another version of the file or of such a reference is dropped first.
     /// </summary>
-    public Search Open(string assemblyPath, IReadOnlyList<TypeDefinitionHandle> scope)
+    public Search Open(string assemblyPath, FileStamp stamp, ReferenceStamps references,
+        IReadOnlyList<TypeDefinitionHandle> scope)
     {
-        var file = new FileInfo(assemblyPath);
         lock (_lock)
         {
             if (_byPath.TryGetValue(assemblyPath, out var texts)
-                && (texts.FileLength != file.Length || texts.FileWritten != file.LastWriteTimeUtc))
+                && (texts.Stamp != stamp || !texts.References.Equals(references)))
             {
                 Drop(assemblyPath, texts);
                 texts = null;
             }
             if (texts is null)
-                _byPath[assemblyPath] = texts = new AssemblyText(file.Length, file.LastWriteTimeUtc);
+                _byPath[assemblyPath] = texts = new AssemblyText(stamp, references);
             texts.Searches++;
             texts.LastSearched = ++_clock;
             return new Search(this, assemblyPath, texts, scope);
@@ -67,10 +77,10 @@ public sealed class CodeTextStore(long maxBytes)
     }
 
     /// <summary>What is kept of one assembly. Every member is guarded by the store's lock.</summary>
-    internal sealed class AssemblyText(long fileLength, DateTime fileWritten)
+    internal sealed class AssemblyText(FileStamp stamp, ReferenceStamps references)
     {
-        public long FileLength => fileLength;
-        public DateTime FileWritten => fileWritten;
+        public FileStamp Stamp => stamp;
+        public ReferenceStamps References => references;
         public Dictionary<TypeDefinitionHandle, byte[]> Texts { get; } = new();
         public Dictionary<TypeDefinitionHandle, string> Failed { get; } = new();
         public object PassLock { get; } = new();

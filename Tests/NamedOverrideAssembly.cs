@@ -5,9 +5,10 @@ namespace Tests;
 
 /// <summary>
 /// Writes an assembly whose virtual calls name an override where the method has no type
-/// parameter. The VB and the F# compiler write such a call for any virtual method, and a call
-/// compiled against another version of a library can turn out to be one; a C# compiler writes it
-/// only for a method with a type parameter of its own, so no fixture project can hold it.
+/// parameter. The VB compiler writes such a call for any virtual method and the F# compiler for
+/// some, and a call compiled against another version of a library can turn out to be one; a C#
+/// compiler writes it only for a method with a type parameter of its own and for an override
+/// with a more specific return type, so no C# fixture project can hold it for a plain override.
 /// NamedOverride.Crane declares the virtual method Lift and the virtual property Reach,
 /// NamedOverride.Gantry overrides both, and NamedOverride.Derrick overrides Lift and calls
 /// Gantry's without virtual dispatch, as <c>base.Lift()</c> compiles. Each method of

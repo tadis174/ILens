@@ -41,39 +41,58 @@ namespace ILens;
 /// shortfall as well.
 ///
 /// A virtual call runs through a slot, whichever declaration of the slot its instruction names,
-/// so both counts book it under the declaration that introduced the slot. A C# compiler names
-/// that declaration, except in a call of a method with a type parameter of its own, where it
-/// names the nearest override the receiver's class sees, and in a call on an object of a class
-/// that overrides with a more specific return type, where it names that override; the VB and
-/// the F# compiler name the nearest override in any virtual call. For an overriding target the
-/// calls through its slot are therefore counted and found as well. One of them is a call to the
-/// target when the decompiler resolves it to the target or to an override of it, which it does
-/// when the receiver's type is the target's class or derives from it. The others only take part
-/// in comparing the two counts.
+/// so both counts book it under the declaration that introduced the slot where the assembly
+/// declares it, and a call through a slot another assembly introduced under the declaration it
+/// names. A C# compiler names the slot's declaration, except in a call of a method with a type
+/// parameter of its own, where it names the nearest override the receiver's class sees, and in
+/// a call on an object of a class that overrides with a more specific return type, where it
+/// names that override; the VB compiler names the nearest override in any virtual call, and the
+/// F# compiler in some. For an overriding target the calls through its slot are therefore
+/// counted and found as well. One of them is a call to the target when the decompiler resolves
+/// it to the target or to an override of it, which it does when the receiver's type is the
+/// target's class or derives from it. The others only take part in comparing the two counts.
 ///
-/// Whether a written call is virtual is read from the call instruction its node carries, and for
-/// a call that is not, the declaration it names. The written form does not say either: a
-/// decompiler can leave out <c>base.</c> where it takes the plain name to mean the same method,
-/// and C# has no form for a call Visual Basic writes through <c>MyClass</c>, which calls an
-/// override of the calling class without virtual dispatch. A property, indexer or event access
-/// is read from the written form alone, as virtual unless it goes through <c>base.</c>, which
-/// the decompiler keeps there, so an access Visual Basic writes through <c>MyClass</c> is
-/// counted under the slot's declaration and its caller reported as a shortfall.
+/// Which method a call names, and whether it is virtual, is read from the call instruction the
+/// tree carries for it: an invocation's on its node, and for a call without call syntax where
+/// the decompiler leaves it, as <see cref="AccessorBehind"/> says for an accessor, in the
+/// instructions of a foreach and on a collection initializer's entry. A deconstruction's
+/// pattern holds the method it calls but not whether the call is virtual, which it is for a
+/// Deconstruct that can be overridden. The written form says neither: a decompiler can leave out <c>base.</c> where it
+/// takes the plain name to mean the same method, C# has no form for a call Visual Basic writes
+/// through <c>MyClass</c>, which calls an override of the calling class without virtual
+/// dispatch, and an access reads alike whichever declaration of its slot the instruction names.
+/// The setter of a compound assignment is called as its getter is, whose instruction is the
+/// only one the decompiler keeps (<see cref="NearestAccessor"/>). Only a call the tree carries
+/// no instruction for is read from its written form, as virtual unless it goes through
+/// <c>base.</c>: the getter an initializer calls to fill what a property holds,
+/// <c>P = { a }</c>.
 /// </remarks>
 public static class CallSiteFinder
 {
     /// <summary>
+    /// The length past which the text of a call, or of an argument shown alone, is shortened,
+    /// as <see cref="Shorten"/> says.
+    /// </summary>
+    public const int LineLength = 300;
+
+    /// <summary>
     /// One call: the member whose source contains it, the overload it calls, the call as C#,
-    /// and the argument for each parameter, in parameter order.
+    /// the argument for each parameter, in parameter order, and whether the call's text was
+    /// shortened to <see cref="LineLength"/>.
     /// </summary>
     public sealed record CallSite(
-        ISymbol Caller, IMethod Target, string Call, IReadOnlyList<Argument> Arguments);
+        ISymbol Caller, IMethod Target, string Call, IReadOnlyList<Argument> Arguments, bool Shortened);
 
     /// <summary>
     /// What a call passes for one parameter. <see cref="IsDefault"/> holds only when the
     /// argument is provably the parameter's default: a constant equal to it.
+    /// <see cref="Shortened"/> says that <see cref="Text"/> was shortened to
+    /// <see cref="LineLength"/>.
     /// </summary>
-    public sealed record Argument(IParameter Parameter, string Text, bool IsDefault);
+    public sealed record Argument(IParameter Parameter, string Text, bool IsDefault, bool Shortened = false);
+
+    /// <summary>A call's or an argument's text, and whether <see cref="Line"/> shortened it.</summary>
+    private readonly record struct Written(string Text, bool Shortened);
 
     /// <summary>
     /// A caller whose IL holds <see cref="Expected"/> calls, of which the decompiled C# shows
@@ -186,47 +205,63 @@ public static class CallSiteFinder
         // The decompiler can copy an annotation onto a second node; it still stands for one call.
         var read = new HashSet<object>(ReferenceEqualityComparer.Instance);
 
-        // Books a call of an accessor of the property or event the code names.
-        void BookAccessor(IMember accessed, IMethod accessor, bool throughBase, Func<string> shown,
+        // The call to show, with its text and what it passes.
+        CallSite Site(IMethod target, Func<Written> shown, IEnumerable<Expression> passed, bool expandedParams)
+        {
+            var line = shown();
+            return new CallSite(caller, target, line.Text, MapArguments(target, passed, expandedParams), line.Shortened);
+        }
+
+        // The declaration a call of named is booked under, as the count in the IL books it: a
+        // virtual call that names an override under the declaration that introduced the slot,
+        // where that is one of slotTokens, and any other call under the method it names. exact
+        // says that the call runs the method it names and no override of it.
+        IMethod BookedUnder(IMethod named, bool exact)
+        {
+            var declaration = (IMethod)named.MemberDefinition;
+            return !exact && Overriding.Of(declaration) && SymbolResolver.SlotDeclarationOf(declaration) is var slot
+                && InAssembly(slot) && slotTokens.Contains(slot.MetadataToken)
+                ? slot
+                : declaration;
+        }
+
+        // Books a call of an accessor of the property or event the code names. named is the
+        // accessor the call's instruction names, and exact whether the instruction calls it
+        // without virtual dispatch; for the setter of a compound assignment they follow from
+        // the getter's instruction, and where the tree carries no instruction for the call,
+        // from the written form.
+        void BookAccessor(IMember accessed, IMethod named, bool exact, Func<Written> shown,
             IEnumerable<Expression> passed)
         {
             // Metadata can declare a property without the accessor its syntax implies;
             // such a call is left to be reported as not shown.
-            if (accessor is null)
+            if (named is null)
                 return;
-            var named = (IMethod)accessor.MemberDefinition;
-            if (!InAssembly(named) || !namedTokens.Contains(named.MetadataToken))
+            var declaration = BookedUnder(named, exact);
+            if (!InAssembly(declaration) || !namedTokens.Contains(declaration.MetadataToken))
                 return;
-            var target = throughBase
-                ? (targetTokens.Contains(named.MetadataToken) ? named : null)
-                : TargetReached(accessed, member => AccessorOfKind(member, named.AccessorKind), targetTokens);
-            found.Add((named.MetadataToken, target is null ? null
-                : new CallSite(caller, target, shown(), MapArguments(target, passed, expandedParams: false))));
+            var target = exact
+                ? (targetTokens.Contains(declaration.MetadataToken) ? declaration : null)
+                : TargetReached(accessed, member => AccessorOfKind(member, declaration.AccessorKind), targetTokens);
+            found.Add((declaration.MetadataToken, target is null ? null : Site(target, shown, passed, expandedParams: false)));
         }
 
         // Books a call of the method the code names, which can be an accessor the code names as
         // a method. Compares by metadata token within the scanned assembly: the decompiler has
         // its own type system, so its symbols are never the same instances as the targets.
         // exact says that the call runs the method it names and no override of it. named is the
-        // method the call's instruction names, where the node carries the instruction; without
-        // it the call is taken to name what C# compiles its written form to. A virtual call
-        // that names an override is booked under the declaration that introduced the slot,
-        // where the count in the IL books it.
-        void BookCall(IMethod method, bool exact, Func<string> shown, IEnumerable<Expression> passed,
+        // method the call's instruction names, where the tree carries the instruction; without
+        // it the call is taken to name what C# compiles its written form to.
+        void BookCall(IMethod method, bool exact, Func<Written> shown, IEnumerable<Expression> passed,
             bool expandedParams = false, IMethod named = null)
         {
-            var declaration = (IMethod)named?.MemberDefinition
-                ?? (exact ? (IMethod)method.MemberDefinition : SymbolResolver.SlotDeclarationOf(method));
-            if (!exact && Overriding.Of(declaration) && SymbolResolver.SlotDeclarationOf(declaration) is var slot
-                && InAssembly(slot) && slotTokens.Contains(slot.MetadataToken))
-                declaration = slot;
+            var declaration = BookedUnder(named ?? (exact ? method : SymbolResolver.SlotDeclarationOf(method)), exact);
             if (!InAssembly(declaration) || !namedTokens.Contains(declaration.MetadataToken))
                 return;
             var callee = exact
                 ? (targetTokens.Contains(declaration.MetadataToken) ? declaration : null)
                 : TargetReached(method, member => member as IMethod, targetTokens);
-            found.Add((declaration.MetadataToken, callee is null ? null
-                : new CallSite(caller, callee, shown(), MapArguments(callee, passed, expandedParams))));
+            found.Add((declaration.MetadataToken, callee is null ? null : Site(callee, shown, passed, expandedParams)));
         }
 
         // Marks the instruction behind a call that was read from its node's resolve result or
@@ -252,7 +287,7 @@ public static class CallSiteFinder
         // The Deconstruct call of a deconstruction and those of the deconstructions nested in
         // it. parts is what the values go to, source the value taken apart where the code
         // writes one.
-        void BookDeconstruction(IL.MatchInstruction pattern, AstNode parts, Expression source, Func<string> shown)
+        void BookDeconstruction(IL.MatchInstruction pattern, AstNode parts, Expression source, Func<Written> shown)
         {
             if (!read.Add(pattern))
                 return;
@@ -261,11 +296,12 @@ public static class CallSiteFinder
             {
                 // An extension method takes the value as its first argument. Where the code
                 // writes none, as for the element of a foreach, what it is taken apart into
-                // stands for it.
+                // stands for it. The pattern holds the method the IL calls, but not whether the
+                // call was virtual, which it is for any Deconstruct that can be overridden.
                 var receiver = deconstruct.IsStatic && (source ?? AsExpression(parts)) is { } value
                     ? new[] { value } : [];
                 BookCall(SeenBy(pattern.Variable.Type, deconstruct), false, shown,
-                    receiver.Concat(elements.Select(AsExpression)));
+                    receiver.Concat(elements.Select(AsExpression)), named: deconstruct);
             }
             for (var i = 0; i < pattern.SubPatterns.Count && i < elements.Count; i++)
             {
@@ -282,8 +318,24 @@ public static class CallSiteFinder
                     accessed = SeenBy(tested.Annotation<IL.MatchInstruction>()?.Variable.Type, accessed);
                 var throughBase = ThroughBase(access);
                 var owner = throughBase ? (IMember)accessed.MemberDefinition : SymbolResolver.SlotDeclarationOf(accessed);
+                IL.CallInstruction getter = null;
                 foreach (var (accessor, shown, passed) in AccessorCalls(access, owner))
-                    BookAccessor(accessed, accessor, throughBase, () => Render(shown), passed);
+                {
+                    // The call's instruction says which accessor it names and whether it is
+                    // virtual, as for an invocation. A compound assignment, x.P += 1 or x.P++,
+                    // keeps only its getter's instruction, which stands for the setter as well.
+                    // Without an instruction the written form decides: the accessor of the
+                    // declaration that introduced the slot, called virtually, or through base.
+                    // the one of the declaration it names.
+                    var behind = accessor is null ? null : AccessorBehind(access, accessor);
+                    if (accessor?.AccessorKind == MethodSemanticsAttributes.Getter)
+                        getter = behind;
+                    var (named, exact) = behind is not null ? (behind.Method, behind is not IL.CallVirt)
+                        : getter is not null && accessor is not null
+                            ? (NearestAccessor(getter.Method, accessor.AccessorKind), getter is not IL.CallVirt)
+                            : (accessor, throughBase);
+                    BookAccessor(accessed, named, exact, () => Line(shown), passed);
+                }
             }
 
             var arguments = node switch
@@ -300,14 +352,14 @@ public static class CallSiteFinder
                 // "base." where the plain name means the same method, and a compiler can name an
                 // override in a virtual call, as a C# compiler does for a generic method.
                 var behind = CallBehind(node, called);
-                BookCall(called, behind is null ? ThroughBase(node) : behind is not IL.CallVirt, () => Render(node),
+                BookCall(called, behind is null ? ThroughBase(node) : behind is not IL.CallVirt, () => Line(node),
                     arguments, resolved is CSharpInvocationResolveResult { IsExpandedForm: true }, behind?.Method);
                 MarkRead(node, called);
             }
 
             if (OperatorCalled(node, out var operands) is { } @operator)
             {
-                BookCall(@operator, false, () => Render(node), operands);
+                BookCall(@operator, false, () => Line(node), operands);
                 MarkRead(node, @operator);
             }
 
@@ -323,7 +375,7 @@ public static class CallSiteFinder
                     && AssignmentExpression.GetCorrespondingBinaryOperator(compound.Operator) is { } sum
                     ? new BinaryOperatorExpression(compound.Left.Clone(), sum, compound.Right.Clone())
                     : converted;
-                BookCall(conversion, false, () => RenderAsCast(value, unwritten.TargetType), [value]);
+                BookCall(conversion, false, () => Line(CastOf(value, unwritten.TargetType)), [value]);
                 MarkRead(node, conversion);
             }
 
@@ -334,7 +386,7 @@ public static class CallSiteFinder
                 foreach (var call in operand.Annotations.OfType<IL.CallInstruction>())
                 {
                     if (call.Method is { IsOperator: true, Name: "op_Implicit" or "op_Explicit" } && read.Add(call))
-                        BookCall(call.Method, false, () => RenderAsCast(operand, call.Method.ReturnType), [operand]);
+                        BookCall(call.Method, false, () => Line(CastOf(operand, call.Method.ReturnType)), [operand]);
                 }
             }
 
@@ -347,8 +399,8 @@ public static class CallSiteFinder
                 {
                     if (OutermostCall(instruction) is not { } call)
                         continue;
-                    BookCall(SeenBy(receiver, call.Method), false, () => RenderHead(loop),
-                        call.Method.IsStatic ? [loop.InExpression] : []);
+                    BookCall(SeenBy(receiver, call.Method), call is not IL.CallVirt, () => HeadLine(loop),
+                        call.Method.IsStatic ? [loop.InExpression] : [], named: call.Method);
                     if (instruction == calls.GetEnumeratorCall)
                         receiver = call.Method.ReturnType;
                 }
@@ -364,13 +416,17 @@ public static class CallSiteFinder
                     if (entry is ArrayInitializerExpression several)
                     {
                         if (entry.GetResolveResult() is InvocationResolveResult { Member: IMethod add })
-                            BookCall(SeenBy(collection, add), false, () => Render(entry),
-                                ReceiverOf(filled, add).Concat(several.Elements));
+                        {
+                            var behind = CallBehind(entry, add);
+                            BookCall(SeenBy(collection, add), behind is not null and not IL.CallVirt, () => Line(entry),
+                                ReceiverOf(filled, add).Concat(several.Elements), named: behind?.Method);
+                        }
                     }
                     else if (entry is not NamedExpression && AddCallOf(entry) is { } call && read.Add(call))
                     {
-                        BookCall(SeenBy(collection, call.Method), false, () => "{ " + Render(entry) + " }",
-                            ReceiverOf(filled, call.Method).Append(entry));
+                        BookCall(SeenBy(collection, call.Method), call is not IL.CallVirt,
+                            () => Line(entry, written => "{ " + Render(written) + " }"),
+                            ReceiverOf(filled, call.Method).Append(entry), named: call.Method);
                     }
                 }
             }
@@ -378,14 +434,14 @@ public static class CallSiteFinder
             if (node is AssignmentExpression assignment)
             {
                 foreach (var deconstruction in assignment.Annotations.OfType<IL.DeconstructInstruction>())
-                    BookDeconstruction(deconstruction.Pattern, assignment.Left, assignment.Right, () => Render(assignment));
+                    BookDeconstruction(deconstruction.Pattern, assignment.Left, assignment.Right, () => Line(assignment));
             }
             else if (node is VariableDesignation designation)
             {
                 // Reached only where no assignment carries the deconstruction, as in a foreach.
                 foreach (var pattern in designation.Annotations.OfType<IL.MatchInstruction>())
                     BookDeconstruction(pattern, designation, null,
-                        () => designation.Parent is ForeachStatement each ? RenderHead(each) : Render(designation.Parent));
+                        () => designation.Parent is ForeachStatement each ? HeadLine(each) : Line(designation.Parent));
             }
         }
 
@@ -398,7 +454,7 @@ public static class CallSiteFinder
                 .FirstOrDefault(call => call.Method.IsConstructor && !call.Method.IsStatic
                     && call.Arguments.Count > 0 && call.Arguments[0].MatchLdThis());
             if (chained != null && !tree.Descendants.Any(node => node.Annotations.Contains(chained)))
-                BookCall(chained.Method, false, () => ": base()", []);
+                BookCall(chained.Method, false, () => new Written(": base()", false), []);
         }
         return found;
     }
@@ -415,6 +471,72 @@ public static class CallSiteFinder
         var slot = SymbolResolver.SlotDeclarationOf(called);
         return node.Annotations.OfType<IL.CallInstruction>()
             .FirstOrDefault(call => SymbolResolver.SlotDeclarationOf(call.Method).Equals(slot));
+    }
+
+    /// <summary>
+    /// The call instruction the tree carries for the call of <paramref name="accessor"/> that
+    /// <paramref name="access"/> makes, or <c>null</c> when it carries none: the one whose
+    /// method shares the accessor's slot, as <see cref="CallBehind"/> finds it. A getter's
+    /// stands on the access, a setter's or an event accessor's on the assignment around it, an
+    /// object initializer's setter's on its entry, which is the access, and a property
+    /// pattern's getter's in the access's own sub-pattern of the pattern's instruction, as the
+    /// call on the value the pattern tests.
+    /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050: <c>CallBuilder.Build</c>
+    /// puts the instruction on what <c>HandleAccessorCall</c> builds, the access for a getter
+    /// and the assignment for an accessor that returns nothing; <c>HandleCompoundAssignment</c>
+    /// keeps only the getter's, as its target; <c>BuildArrayInitializerExpression</c> puts a
+    /// setter's on its <c>NamedExpression</c>, an indexer's setter's on the assignment
+    /// <c>BuildDictionaryInitializerExpression</c> builds for an index initializer's entry,
+    /// and <c>MakeInitializerAssignment</c> none on the one of an entry that fills what a
+    /// property holds; <c>TranslatePattern</c> puts the pattern's instruction on the
+    /// <c>RecursivePatternExpression</c>, whose named arguments it writes one for each of the
+    /// instruction's sub-patterns, in their order. The cases:
+    /// CallSites_OnAnOverrideOfAnotherAssemblysMember_ListsEachCallOnce and
+    /// CallSites_OnAPropertyCalledThroughMyClass_ListsEachCallOnce in BaseCallTests, and
+    /// Scale's get_Mark and Showcase's set_Item in
+    /// FindCallSites_ShowsACallWrittenWithoutCallSyntax in CallSiteTests.
+    /// </remarks>
+    private static IL.CallInstruction AccessorBehind(Expression access, IMethod accessor)
+    {
+        if (CallBehind(access, accessor) is { } carried)
+            return carried;
+        if (access.Parent is AssignmentExpression assignment && assignment.Left == access)
+            return CallBehind(assignment, accessor);
+        if (access.Parent is not RecursivePatternExpression pattern
+            || pattern.Annotation<IL.MatchInstruction>() is not { } match)
+            return null;
+
+        // The decompiler writes one named argument for each of the instruction's sub-patterns,
+        // in their order, so the access's place picks its own: a pattern can test one property
+        // twice, as { Operator: not A, Operator: not B } does, each with a call of its own.
+        var place = pattern.SubPatterns.TakeWhile(sub => sub != access).Count();
+        var own = pattern.SubPatterns.Count == match.SubPatterns.Count && place < match.SubPatterns.Count
+            ? [match.SubPatterns[place]]
+            : match.SubPatterns.ToList();
+        var slot = SymbolResolver.SlotDeclarationOf(accessor);
+        return own
+            .SelectMany(sub => sub.Descendants)
+            .OfType<IL.CallInstruction>()
+            .FirstOrDefault(call => call.Arguments.Count > 0 && call.Arguments[0].MatchLdLocRef(match.Variable)
+                && SymbolResolver.SlotDeclarationOf(call.Method).Equals(slot));
+    }
+
+    /// <summary>
+    /// The accessor of the kind <paramref name="kind"/> that a call of the accessor
+    /// <paramref name="method"/> stands for in a compound assignment: the one of its property,
+    /// or of the nearest property that one overrides that declares one, as a compiler names
+    /// it. The decompiler keeps no instruction for that call.
+    /// </summary>
+    private static IMethod NearestAccessor(IMethod method, MethodSemanticsAttributes kind)
+    {
+        for (var member = method.AccessorOwner; member != null; member = Overriding.Overridden(member))
+        {
+            if (AccessorOfKind(member, kind) is { } accessor)
+                return accessor;
+        }
+        return null;
     }
 
     /// <summary>
@@ -489,22 +611,25 @@ public static class CallSiteFinder
     /// The Add call behind <paramref name="entry"/>, an entry of a collection initializer with
     /// one argument, or <c>null</c>. The entry carries the call as an annotation, beside the
     /// instruction of its own when it is itself a call; the Add call is the one the other is an
-    /// argument of. A single call that is the entry's own is no Add call.
+    /// argument of. A single call that is the entry's own is no Add call, and neither is an
+    /// accessor's: the entry of an index initializer, <c>[0] = item</c>, carries its setter's,
+    /// which the access inside it books (<see cref="AccessorBehind"/>), unless the indexer takes
+    /// a params array, whose calls are all reported as not shown.
     /// </summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050:
+    /// <c>AccessPathElement.GetAccessPath</c> makes an entry an Add call's only where the method
+    /// it calls is no accessor. The case: Showcase's set_Item in
+    /// FindCallSites_ShowsACallWrittenWithoutCallSyntax in CallSiteTests.
+    /// </remarks>
     private static IL.CallInstruction AddCallOf(Expression entry)
     {
         var calls = entry.Annotations.OfType<IL.CallInstruction>().ToList();
         var outer = calls.FirstOrDefault(call => calls.All(other => other.IsDescendantOf(call)));
-        if (outer is null)
+        if (outer is null || outer.Method.IsAccessor)
             return null;
-        var own = entry.GetResolveResult() switch
-        {
-            InvocationResolveResult invocation => invocation.Member,
-            MemberResolveResult member => member.Member,
-            _ => null,
-        };
-        var named = outer.Method.AccessorOwner ?? outer.Method;
-        return calls.Count == 1 && own != null && own.MemberDefinition.Equals(named.MemberDefinition) ? null : outer;
+        return calls.Count == 1 && entry.GetResolveResult() is InvocationResolveResult { Member: { } own }
+            && own.MemberDefinition.Equals(outer.Method.MemberDefinition) ? null : outer;
     }
 
     /// <summary>
@@ -766,7 +891,8 @@ public static class CallSiteFinder
             }
 
             var isDefault = values.Count == 1 && IsDefaultValue(parameter, values[0]);
-            mapped.Add(new Argument(parameter, string.Join(", ", values.Select(Render)), isDefault));
+            var text = ArgumentLine(values);
+            mapped.Add(new Argument(parameter, text.Text, isDefault, text.Shortened));
         }
         return mapped;
     }
@@ -818,22 +944,214 @@ public static class CallSiteFinder
     private static string Render(AstNode node) =>
         Regex.Replace(node.ToString(Formatting), @"\r?\n\s*", " ").Trim();
 
+    /// <summary>What a shortened line writes in place of the code it leaves out.</summary>
+    private const string Elision = "...";
+
+    /// <summary>
+    /// <paramref name="root"/>, the node of a call, as its line, written by
+    /// <paramref name="write"/>, or by <see cref="Render"/> without it, and shortened as
+    /// <see cref="Shorten"/> says.
+    /// </summary>
+    private static Written Line(AstNode root, Func<AstNode, string> write = null)
+    {
+        write ??= Render;
+        return Shorten(write(root), () => root.Clone(), write, (_, _) => false);
+    }
+
+    /// <summary>
+    /// What a call passes for one parameter as one line, the values of an expanded params
+    /// parameter together, shortened as <see cref="Shorten"/> says, except that a value keeps
+    /// itself and the body of a lambda that is one: an argument shown alone is what was asked
+    /// about, and cut it keeps its start, where left out it would read <c>() =&gt; ...</c>.
+    /// </summary>
+    private static Written ArgumentLine(IReadOnlyList<Expression> values) =>
+        Shorten(string.Join(", ", values.Select(Render)),
+            () => new ArrayInitializerExpression(values.Select(value => value.Clone())),
+            list => string.Join(", ", ((ArrayInitializerExpression)list).Elements.Select(Render)),
+            (list, node) => node.Parent == list || IsLambdaBody(node) && node.Parent.Parent == list);
+
+    /// <summary>
+    /// <paramref name="text"/>, a line <paramref name="write"/> wrote, shortened to
+    /// <see cref="LineLength"/> characters where it is longer. Where leaving parts of its code out
+    /// can make it fit, a copy of its tree from <paramref name="copy"/> is written again with
+    /// first the bodies of its lambdas and anonymous methods, then the contents of its
+    /// initializers, each the largest first, as <c>...</c> until it fits, passing over a part its
+    /// <c>...</c> would not make shorter, the copy's root and what <paramref name="keeps"/> holds.
+    /// Where leaving all of them out would not make it fit either, the line is cut as it stands
+    /// (<see cref="Cut"/>), since the parts would be lost for a few characters more of its end.
+    /// </summary>
+    /// <remarks>
+    /// A body goes before an initializer since it is the caller's own code, which decompiling the
+    /// caller shows, where an initializer's entries are values the call passes. Over the methods
+    /// of every third type of a game assembly, 630 of 64,093 call lines were longer than 300
+    /// characters, the longest 3,592, and two in three fit once parts are left out. Before the
+    /// cut took a line as it stands, 44 of the 77 cut lines of a library and 13 of the game's
+    /// 208 had lost parts first, mostly lambdas of a few characters such as
+    /// <c>a =&gt; a.Expression</c>.
+    /// </remarks>
+    private static Written Shorten(string text, Func<AstNode> copy, Func<AstNode, string> write,
+        Func<AstNode, AstNode, bool> keeps)
+    {
+        if (text.Length <= LineLength)
+            return new Written(text, false);
+
+        // The least the line can be: every part left out, the outermost first, which a walk from
+        // the root reaches before the parts inside them.
+        var least = copy();
+        foreach (var part in Elidable(least, keeps))
+        {
+            if (Attached(part, least) && Gain(part) > 0)
+                Elide(part);
+        }
+        if (write(least).Length > LineLength)
+            return new Written(Cut(text), true);
+
+        var tree = copy();
+        var parts = Elidable(tree, keeps);
+        foreach (var kind in new Func<AstNode, bool>[] { IsBody, IsInitializer })
+        {
+            var largestFirst = parts
+                .Where(part => kind(part) && Attached(part, tree))
+                .Select(part => (Part: part, Gain: Gain(part)))
+                .Where(part => part.Gain > 0)
+                .OrderByDescending(part => part.Gain)
+                .Select(part => part.Part)
+                .ToList();
+            foreach (var part in largestFirst)
+            {
+                // A part inside one left out before it is gone with it.
+                if (!Attached(part, tree))
+                    continue;
+                Elide(part);
+                var shortened = write(tree);
+                if (shortened.Length <= LineLength)
+                    return new Written(shortened, true);
+            }
+        }
+        // Not reached: this walk leaves out every part the least version leaves out.
+        return new Written(Cut(text), true);
+    }
+
+    /// <summary>
+    /// <paramref name="text"/> cut to <see cref="LineLength"/> characters with the <c>...</c>
+    /// that ends it, before a surrogate pair the cut would split, and before the dots it would
+    /// end in, which would read as more than the marker, <c>line....</c>.
+    /// </summary>
+    private static string Cut(string text)
+    {
+        var kept = LineLength - Elision.Length;
+        if (char.IsHighSurrogate(text[kept - 1]))
+            kept--;
+        while (kept > 0 && text[kept - 1] == '.')
+            kept--;
+        return text[..kept] + Elision;
+    }
+
+    /// <summary>
+    /// The parts of <paramref name="tree"/> that <see cref="Elide"/> can write as <c>...</c>,
+    /// those outside before those inside them, without the root and what
+    /// <paramref name="keeps"/> holds.
+    /// </summary>
+    private static List<AstNode> Elidable(AstNode tree, Func<AstNode, AstNode, bool> keeps) =>
+        tree.Descendants.Where(node => (IsBody(node) || IsInitializer(node)) && !keeps(tree, node)).ToList();
+
+    /// <summary>Whether <paramref name="part"/> is still in <paramref name="tree"/>, not inside a part left out.</summary>
+    private static bool Attached(AstNode part, AstNode tree) => part.AncestorsAndSelf.Contains(tree);
+
+    /// <summary>How many characters writing <paramref name="part"/> as its placeholder takes off its line.</summary>
+    private static int Gain(AstNode part) => Render(part).Length - Placeholder(part).Length;
+
+    /// <summary>The body of a lambda, or an anonymous method, whose body <see cref="Elide"/> leaves out with it.</summary>
+    private static bool IsBody(AstNode node) => IsLambdaBody(node) || node is AnonymousMethodExpression;
+
+    private static bool IsLambdaBody(AstNode node) => node.Parent is LambdaExpression lambda && lambda.Body == node;
+
+    /// <summary>The braces of an object, collection or array initializer, or of an anonymous type, that hold something.</summary>
+    private static bool IsInitializer(AstNode node) =>
+        node is ArrayInitializerExpression { Elements.Count: > 0 } or AnonymousTypeCreateExpression { Initializers.Count: > 0 };
+
+    /// <summary>
+    /// What <see cref="Elide"/> writes for <paramref name="part"/>: <c>...</c> for a lambda's
+    /// body, braces around it for an initializer's contents, and for an anonymous method the
+    /// method with its parameters, <c>delegate(int x) { ... }</c>.
+    /// </summary>
+    private static string Placeholder(AstNode part) => part switch
+    {
+        _ when IsLambdaBody(part) => Elision,
+        AnonymousMethodExpression method => HeadOf(method) + "{ " + Elision + " }",
+        AnonymousTypeCreateExpression => "new { " + Elision + " }",
+        _ => "{ " + Elision + " }",
+    };
+
+    /// <summary>An anonymous method as written up to its body, <c>delegate(int x) </c>.</summary>
+    private static string HeadOf(AnonymousMethodExpression method)
+    {
+        var head = (AnonymousMethodExpression)method.Clone();
+        head.Body = new BlockStatement();
+        var written = Render(head);
+        return written[..written.LastIndexOf('{')];
+    }
+
+    /// <summary>Writes <paramref name="part"/> as its <see cref="Placeholder"/>.</summary>
+    private static void Elide(AstNode part)
+    {
+        if (IsLambdaBody(part))
+        {
+            ((LambdaExpression)part.Parent).Body = Verbatim(Elision);
+        }
+        else if (part is AnonymousMethodExpression method)
+        {
+            method.ReplaceWith(Verbatim(Placeholder(method)));
+        }
+        else if (part is ArrayInitializerExpression initializer)
+        {
+            initializer.Elements.Clear();
+            initializer.Elements.Add(Verbatim(Elision));
+        }
+        else if (part is AnonymousTypeCreateExpression anonymous)
+        {
+            anonymous.Initializers.Clear();
+            anonymous.Initializers.Add(Verbatim(Elision));
+        }
+    }
+
+    /// <summary>A node the output visitor writes as <paramref name="text"/>, as it is.</summary>
+    /// <remarks>
+    /// Library behavior, read in ICSharpCode.Decompiler 11.2.0.10050:
+    /// <c>TextWriterTokenWriter.WritePrimitiveValue</c> writes a value of a type it does not know
+    /// by its <c>ToString</c>, unescaped, where an identifier of that name would have a backslash
+    /// in it escaped again; <c>LongCallTests</c> pins the placeholders written so.
+    /// </remarks>
+    private static PrimitiveExpression Verbatim(string text) => new(new VerbatimText(text));
+
+    /// <summary>The value <see cref="Verbatim"/> gives the output visitor, written as its text.</summary>
+    private sealed class VerbatimText(string text)
+    {
+        public override string ToString() => text;
+    }
+
     /// <summary>
     /// <paramref name="expression"/> as the cast to <paramref name="type"/> that the compiler
     /// inserted and the source does not write, <c>(Money)3</c>.
     /// </summary>
-    private static string RenderAsCast(Expression expression, IType type)
+    private static CastExpression CastOf(Expression expression, IType type)
     {
         var cast = new CastExpression(
             new TypeSystemAstBuilder { AlwaysUseShortTypeNames = true }.ConvertType(type), expression.Clone());
         cast.AcceptVisitor(new InsertParenthesesVisitor { InsertParenthesesForReadability = true });
-        return Render(cast);
+        return cast;
     }
 
-    /// <summary>The head of a foreach without its body, <c>foreach (int item in items)</c>.</summary>
-    private static string RenderHead(ForeachStatement loop) =>
-        $"{(loop.IsAsync ? "await " : "")}foreach ({Render(loop.VariableType)} {Render(loop.VariableDesignation)} " +
-        $"in {Render(loop.InExpression)})";
+    /// <summary>
+    /// The head of a foreach without its body as a line, <c>foreach (int item in items)</c>,
+    /// shortened in what the loop runs over.
+    /// </summary>
+    private static Written HeadLine(ForeachStatement loop)
+    {
+        var head = $"{(loop.IsAsync ? "await " : "")}foreach ({Render(loop.VariableType)} " +
+            $"{Render(loop.VariableDesignation)} in ";
+        return Line(loop.InExpression, runsOver => head + Render(runsOver) + ")");
+    }
 
     /// <summary>
     /// How often an initializer reads the property it fills for <paramref name="entry"/>: once

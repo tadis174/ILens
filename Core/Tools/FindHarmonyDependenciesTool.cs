@@ -52,7 +52,10 @@ public static class FindHarmonyDependenciesTool
             .GroupBy(line => line, StringComparer.Ordinal)
             .Select(group => group.Count() > 1 && UnreadPart.IsMatch(group.Key) ? $"{group.Key} ×{group.Count()}" : group.Key)
             .ToList();
-        return ListOutput.Format(lines, limit, new Noun("dependency", "dependencies"));
+        // The scan reads the code of every method of the mod, and a dependency behind the point
+        // where a method's code breaks off is missing from the list.
+        return ListOutput.Format(lines, limit, new Noun("dependency", "dependencies"),
+            notShown: lease.Host.NotCheckedBrokenBodies());
     }
 
     // A '?' for a part the scan could not read. A '?' right after a name or a '>' is C#'s mark of a

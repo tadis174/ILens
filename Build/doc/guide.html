@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ILens 12 — User Guide</title>
+<title>ILens 13 — User Guide</title>
 <style>
 :root {
   --brand-green:        #008800;
@@ -151,7 +151,7 @@ ul.tight li { margin: 0.3rem 0; }
   </div>
   <div class="header-text">
     <h1>ILens</h1>
-    <p class="version">Version 12 — user guide</p>
+    <p class="version">Version 13 — user guide</p>
     <p class="tagline">MCP server for inspecting .NET assemblies</p>
   </div>
 </div>
@@ -293,11 +293,11 @@ as an MCP server in a Claude app session.</p>
 <code>PATH</code> from the registry when that process starts, and later registry changes do not
 retroactively reach already-running processes. If <code>ilens</code> is a brand-new entry on
 your user PATH — true for a first-ever winget portable install, which adds
-<code>%LOCALAPPDATA%\Microsoft\WinGet\Links\</code>, and for any <code>install.ps1</code> run,
+<code>%LOCALAPPDATA%\Microsoft\WinGet\Links\</code>, and for the first <code>install.ps1</code> run,
 which adds <code>%LOCALAPPDATA%\Programs\ILens\</code> — an already-running Claude app holds a
 stale environment, and every Claude Code session inside it inherits that stale environment from
-the parent app. Subsequent winget updates of an already-installed package do not touch PATH and
-do not trigger this gate.</p>
+the parent app. Later updates, through winget or a rerun of <code>install.ps1</code>, do not touch
+PATH and do not trigger this gate.</p>
 
 <p>The second is <strong>MCP-server registration</strong>. Claude Code reads
 <code>.mcp.json</code> only at session start, so editing it inside a running session does not
@@ -385,17 +385,40 @@ resolved, such as one below a folder the server may not list, stops the server a
 closes the assemblies used longest ago until it is back under three quarters of it, so the
 budget can be exceeded only while calls run; an assembly that alone needs more is reopened for
 each call, one whose file alone is larger than the budget is refused, and the decompiled text
-<code>search_code</code> keeps for later searches takes at most a quarter of the budget.</li>
+<code>search_code</code> keeps for later searches takes at most a quarter of the budget. The
+references inside the roots, which ILens holds in memory, count toward the budget, each once,
+however many open assemblies reference it. At each call, ILens compares an open assembly's file
+with the length and last write time it had when ILens read it, and reads the assembly anew where
+either has changed, as after a project rebuilds a library in place, so every answer comes from the
+file as it is on disk.</li>
 <li>All MCP tools are read-only — no writes to assemblies, no shell-out, no network calls.</li>
 <li>The server speaks stdio only; it does not open a network port.</li>
 <li>The allow-root bounds which <em>target</em> assemblies can be inspected — it is not the
 boundary of every file ILens opens: decompilation, and every question that reads a type another
-assembly defines, also reads the target's references as type-resolution context, inside the
-roots from the target's own directory and the top of each allow-root (a reference there passes
-the same link check as a requested path), and outside them from the installed .NET runtimes and
-.NET Framework, the global assembly cache, Windows metadata for WinRT references, and the NuGet
-package folders (<code>NUGET_PACKAGES</code> or <code>%USERPROFILE%\.nuget\packages</code>)
-that a <code>.deps.json</code> beside the target names.</li>
+assembly defines, also reads the target's references as type-resolution context. Inside the
+roots, ILens reads them from the target's own directory and the top of each allow-root, where a
+reference passes the same link check as a requested path. It reads such a reference whole into
+memory, once for all the open assemblies that reference that build of it, and closes the file at
+once, so a project can rebuild a library inside the roots while ILens runs, and the next call on an
+assembly that references it answers from the new build. Outside the roots, ILens reads references
+from the installed .NET runtimes and .NET Framework, the global assembly cache, Windows metadata
+for WinRT references, and the NuGet package folders (<code>NUGET_PACKAGES</code> where it is set,
+and <code>%USERPROFILE%\.nuget\packages</code>) that a <code>.deps.json</code> beside the target
+names, and holds such a file open while its assembly is open, since no project's build writes
+there. Of the folders a <code>.deps.json</code> names, ILens searches only those under the NuGet
+package folders, and it looks for a reference by its name only where the name is a plain file
+name, so neither a <code>.deps.json</code> nor an assembly planted in an allowed folder can lead
+ILens, through what it names, to an assembly elsewhere on the disk or make Windows connect to a
+share on another computer.</li>
+<li><code>analyze</code>'s <code>instantiated_by</code>, <code>exposed_by</code> and
+<code>applied_to</code> run on a reference search of the analyzer library's own, which the
+bounds above do not reach. On an assembly that names a reference or a module by anything but a
+plain file name, or whose <code>.deps.json</code> names a folder outside the NuGet package
+folders, is a link, is not valid JSON or cannot be read, they answer with an error that names the
+reason: <code>This analysis is not run on ...: the reference search it runs on follows what the
+assembly names, and ...</code>, such as <code>its dependency manifest, Read.deps.json, names a
+folder outside the NuGet package folders</code>. For an assembly built for the .NET Framework,
+neither ILens's search nor that one reads a <code>.deps.json</code>.</li>
 </ul>
 
 <h2 id="tools">Tool reference</h2>
@@ -486,7 +509,13 @@ before a name that is a keyword, <code>object @object</code>.</p>
 <p>Every tool takes these forms back, so a name from one answer can be passed to the next tool.
 <code>type_name</code> also accepts the reflection form (<code>Outer+Inner</code>,
 <code>System.Func`2</code>) and an argument list (<code>System.Func&lt;int, bool&gt;</code>, whose
-argument count is the arity). A name is looked up among the types the assembly defines,
+argument count is the arity). A class whose own name holds angle brackets, as C++/CLI names the
+class of a template instance, such as <code>gcroot&lt;System::String ^&gt;</code>, is found by its
+name as <code>find_types</code> lists it, in <code>type_name</code> as in
+<code>parameter_types</code> and <code>return_type</code>. <code>type_name</code> reads the
+brackets as an argument list only where no type bears the name as written, so a generic class of
+the name before the brackets stays reachable as <code>Name&lt;T&gt;</code>,
+<code>Name&lt;&gt;</code> or <code>Name`1</code>. A name is looked up among the types the assembly defines,
 references and forwards to another assembly together. A name written without arity means the one
 type of that name without type parameters where there is one, and otherwise the only type of that
 name, so a name the assembly gives only to generic types of its own means the type without type
@@ -652,11 +681,20 @@ of an error, a <code>Not shown:</code> line under <code>list_members</code>, or 
 <code>Not checked:</code> line under <code>decompile</code>, <code>analyze</code> and
 <code>compare</code>, and gives one of three reasons. ILens takes the first file of the library's
 name it finds, beside the inspected assembly, then at the top of each allow-root in the order
-given, then among the installed .NET libraries, so the remedy is always to make the right file the
-first one found:</p>
+given, then among the installed .NET libraries. For an assembly built for .NET Core or .NET 5 and
+later, a library of its framework found in the folder of an older framework is taken from the
+installed .NET instead, so that such a folder does not stand in for the framework the assembly was
+built for: a folder whose core library is <code>mscorlib.dll</code>, such as a Unity game's
+library folder or Windows' .NET Framework folder, or one whose .NET runtime is older than the
+assembly's. A folder with a .NET runtime at least as new, such as the folder of a game that runs
+on .NET, keeps its place in the order. A library built for .NET Standard or the .NET Framework
+takes its framework from the first folder that holds it. So the remedy is always to make the right
+file the first one found:</p>
 <ul class="tight">
 <li><code>ILens could not load ExternalLib, Version=1.0.0.0</code>: no file of the library's name
-was found. Give the folder that holds it as an allow-root.</li>
+was found. Give the folder that holds it as an allow-root. A reference that names its library by a
+path, as in <code>ILens could not load ..\Outside\ExternalLib, Version=1.0.0.0</code>, is never
+looked up, see <a href="#security">Security model</a>, and no allow-root changes that.</li>
 <li><code>&lt;library&gt; as loaded from &lt;file&gt;, Version=&lt;version found&gt;, does not
 hold &lt;class&gt;; referenced is Version=&lt;version referenced&gt;</code>, the last clause only
 where the versions differ: the file found is another build than the one the assembly was made
@@ -689,6 +727,24 @@ as the library of the same name in the installed .NET's <code>shared</code> fold
 reference pack. The questions that read declarations alone answer as for any assembly, and
 <code>compare</code> compares no body of a reference assembly and says so beneath its lists.</p>
 
+<p id="conv-broken-code"><strong>Code that breaks off.</strong> The code of a method can break
+off inside an instruction, as a tool that guards an assembly against decompiling writes it on
+purpose and a damaged file can have it. Every tool reads such code up to the break and answers
+from what it read, so a use past the break is missing from the answer. An answer that read the
+code of such methods therefore ends with one line naming them, here for a test assembly in which
+the code of two methods breaks off:</p>
+<pre><code>Not checked: the code of 2 methods past where it breaks off inside an instruction: BrokenBody.Shapes.Cut(), BrokenBody.Shapes.CutAddress()</code></pre>
+<p>The line ends the answers of <code>analyze</code> with <code>used_by</code>,
+<code>instantiated_by</code>, <code>read_by</code>, <code>assigned_by</code>,
+<code>call_sites</code> or <code>uses</code>, of <code>search_code</code> and of
+<code>find_harmony_dependencies</code>; in <code>compare</code> it begins
+<code>Not compared:</code> and names with each method the builds in which its code breaks off,
+<code>BrokenBody.Shapes.Cut() in A and B</code>. One method is named alone, <code>Not checked: the
+code of BrokenBody.Shapes.Cut() past where it breaks off inside an instruction</code>; of more,
+five are named and the rest counted, <code>... and 2 more</code>. Code the compiler moved out of
+a method is named as that method, and an accessor as its property or event, in which case the
+line counts <code>members</code>. An assembly without such code answers without the line.</p>
+
 <p id="conv-strict"><strong>Strict arguments.</strong> An argument name a tool does not declare
 is rejected with the list of valid names. A parameter that does not apply to the question asked
 is rejected too, such as <code>parameter_name</code> with a <code>kind</code> other than
@@ -716,7 +772,13 @@ methods with <code>type_name</code>. Any combination of filters narrows the sear
 <dd>Path to the .NET assembly to inspect (must be under an allowed root).</dd>
 <dt><code>name_contains</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
 <dd>Case-insensitive substring of the method's name, without namespace or declaring type. A
-constructor's name here is <code>.ctor</code>.</dd>
+constructor's name here is <code>.ctor</code>. A text that ends in angle brackets as ILens writes
+a generic method, such as <code>Get&lt;T&gt;</code> or <code>Get&lt;int&gt;</code>, finds the
+methods whose name ends in the text before the brackets and that declare as many type parameters
+of their own as the brackets count, whatever names or types the brackets hold. So a method name
+copied from <code>find_methods</code>, or from <code>find_harmony_dependencies</code>, which writes
+the type arguments a patch targets, finds its method: <code>Get&lt;int&gt;</code> leaves out
+<code>Get()</code>, <code>Get&lt;T, U&gt;</code> and <code>GetAll&lt;T&gt;</code>.</dd>
 <dt><code>return_type</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
 <dd>Return-type pattern, matched by the rules of <code>parameter_types</code>.</dd>
 <dt><code>parameter_types</code> <span class="badge badge-optional">optional</span> <code>string[]</code></dt>
@@ -737,7 +799,11 @@ compiler-generated type named here has its methods listed whatever
 <code>include_compiler_generated</code> says.</dd>
 <dt><code>type_name_contains</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
 <dd>Case-insensitive substring of the declaring type's name, without namespace; cannot be
-combined with <code>type_name</code>. Matching nothing is an ordinary empty result.</dd>
+combined with <code>type_name</code>. Matching nothing is an ordinary empty result. A text that
+ends in angle brackets as ILens writes a generic type, such as <code>Cache&lt;&gt;</code> or
+<code>Cache&lt;T&gt;</code>, finds the methods of the types whose name ends in the text before the
+brackets and that declare as many type parameters of their own as the brackets count, whatever
+names or types the brackets hold.</dd>
 <dt><code>accessibility</code> <span class="badge badge-optional">optional</span> <code>public | public_protected | all</code></dt>
 <dd>Default <code>public_protected</code>, which also covers <code>protected internal</code> and
 <code>private protected</code>; <code>all</code> adds internal and private. It filters the
@@ -819,7 +885,15 @@ filter, every type.</p>
 <dd>Exact namespace, e.g. <code>System.IO</code>; its sub-namespaces are not included.</dd>
 <dt><code>name_contains</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
 <dd>Case-insensitive substring of the type's own name, without namespace or enclosing type.
-<code>Stream</code> finds <code>MemoryStream</code> and <code>FileStream</code>.</dd>
+<code>Stream</code> finds <code>MemoryStream</code> and <code>FileStream</code>. A text that ends
+in angle brackets as ILens writes a generic type, such as <code>Cache&lt;&gt;</code>,
+<code>Cache&lt;T&gt;</code> or <code>Cache&lt;int&gt;</code>, finds the types whose own name ends
+in the text before the brackets and that declare as many type parameters of their own as the
+brackets count, whatever names or types the brackets hold, so a type name copied from another
+answer finds its type: <code>Cache&lt;&gt;</code> leaves out a class <code>Cache</code> and a
+<code>Cache&lt;,&gt;</code>, and a class nested in a generic class counts only its own type
+parameters. A name that bears brackets as it stands, as C++/CLI names the class of a template
+instance, matches as it stands as well.</dd>
 <dt><code>accessibility</code> <span class="badge badge-optional">optional</span> <code>public | public_protected | all</code></dt>
 <dd>Default <code>public_protected</code>, which also covers <code>protected internal</code> and
 <code>private protected</code>; <code>all</code> adds internal and private. See
@@ -982,6 +1056,12 @@ reference search made of the class's library, which <a href="#conv-other-assembl
 assemblies</a> explains with what to do for each case. Where it reads <code>ILens could not load
 Lib, Version=1.0.0.0</code> and nothing more, giving the folder that holds that library as another
 <code>--allow-root</code> lets ILens read it.</p>
+<p>Where the code of a method breaks off inside an instruction, see
+<a href="#conv-broken-code">code that breaks off</a>, <code>used_by</code>,
+<code>instantiated_by</code>, <code>read_by</code>, <code>assigned_by</code> and
+<code>call_sites</code> end with the line that names every such method of the assembly, and
+<code>uses</code> with the line where the code of the method asked about breaks off, its lambdas,
+local functions, iterator and async body included.</p>
 <p><strong>Who uses a type.</strong> <code>used_by</code> on a type lists the types and members
 that name it: in their code, their signatures, their base types and interfaces, the constraints
 on their type parameters or their attributes, using a member the type declares included. An
@@ -1019,7 +1099,8 @@ compiles a call to a virtual method as a call to the declaration that introduced
 <code>used_by</code> and <code>call_sites</code> on that declaration list every such call, also a call on an object of a
 subclass whose compiled form names the subclass's override. A C# compiler names the override for
 a method with a type parameter of its own and for an override that returns a more specific type,
-the Visual Basic and F# compilers for any virtual method. So <code>used_by</code> on
+and the Visual Basic compiler for any virtual method; the F# compiler names the declaration that
+introduced the method in most calls and an override in some. So <code>used_by</code> on
 <code>CallShapes.BaseCalls.Gate.Pass&lt;T&gt;(T)</code> lists
 <code>CallShapes.BaseCalls.Porter.Hand(Vault)</code>, whose call <code>vault.Pass(5)</code> the
 compiler wrote as a call to the override in <code>Vault</code>. This holds for a method the
@@ -1049,7 +1130,9 @@ FieldAccess.Holder.SetThroughRefLocal(bool)</code></pre>
 <p>The <code>read_by</code> answer marks the same line <code>(may read: ...)</code>. The mark
 names the method as the compiled call writes it, with <code>ref</code> for every parameter passed
 by reference, so <code>TryParse</code>'s <code>out</code> parameter reads <code>ref int</code>
-there. A
+there. A method that takes the field's address before its code breaks off is listed under both
+questions too, marked <code>(may read: takes its address)</code> and <code>(may write: takes its
+address)</code>, since ILens cannot follow the address through such code. A
 constant, a decimal constant included, cannot be asked about: the compiler copies its value into
 each place that uses it, so no instruction names it, and the question is an error that says so.
 For a value of an enum, the error points to <code>used_by</code> on the enum.</p>
@@ -1158,6 +1241,23 @@ is the default is marked <code>(default)</code>. <code>non_default_only</code> k
 calls, and its header says how many of all calls they are, naming the default where every
 overload has the same: <code>4 of 6 calls to CallShapes.Repeats.Bell.Ring(int) pass times other
 than its default 1:</code>.</p>
+<p>A call longer than 300 characters is shortened: parts of it are written as <code>...</code>
+until it fits, first the bodies of its lambdas and anonymous methods, then the entries of its
+initializers, the largest first. An anonymous method keeps its parameters,
+<code>delegate(ref int position, out string text) { ... }</code>, and an initializer its braces,
+<code>new Settings { ... }</code>. A call that leaving parts out cannot make fit is cut at 300
+characters as it stands and ends in <code>...</code>. With <code>parameter_name</code>, the
+argument is shortened the same way, except that an argument that is itself a lambda or an
+anonymous method keeps its body and is cut, so that its start stays readable. An answer with a
+shortened line says so after its list, counting only the calls, or with
+<code>parameter_name</code> the arguments, that the limit shows; <code>decompile</code> on the
+caller shows a call whole. Asked of <code>CallShapes.dll</code>:</p>
+<pre><code>2 calls to CallShapes.LongCalls.Target.Run(string, Action, bool):
+CallShapes.LongCalls.Callers.Brief()
+  Target.Run("brief", () =&gt; { Console.WriteLine("brief"); }, true)
+CallShapes.LongCalls.Callers.LongLambda()
+  Target.Run("lambda", () =&gt; ..., true)
+Shortened: 1 call longer than 300 characters; ... marks the code left out</code></pre>
 <p>A call that C# writes without call syntax is listed like any other, in the form the code has,
 and the header's count includes it, so an answer about an operator or a base class's constructor
 can hold thousands of calls. Asked of <code>CallShapes.dll</code>, these lines stand beneath
@@ -1223,9 +1323,10 @@ overrides instead, which another assembly defines, so those calls are not counte
 <p><strong>Interfaces.</strong> <code>implements</code> lists the interface members a method,
 property, event or accessor implements, also of interfaces another assembly or the core library
 defines; an accessor is answered with the interface's accessor. <code>implemented_by</code> on an
-interface member lists the members classes bind it to, and an override of such a member that runs
-in its place; a member that only shares the interface member's name and parameters, such as one
-that hides the bound member, has another return type or is not public, is not listed. On an
+interface member lists what runs for the objects of each class that has the interface: the member
+the class binds it to, or an override of that member that runs in its place. A member that only
+shares the interface member's name and parameters, such as one that hides the bound member, is not
+public, or has another return type and does not override the bound member, is not listed. On an
 accessor it lists the accessors that implement it, and a line under the question about a property
 can be a method, where a compiler wrote accessor methods without a property. A member that only
 classes below its own bind, such as a member of a base class without the interface, is marked
@@ -1234,15 +1335,37 @@ with those classes, since it implements the interface member for their objects a
 <code>Tag</code> from <code>TagBase</code>:</p>
 <pre><code>1 implementation of ExplicitMembers.Inherited.ITag.Tag() [declared]:
 ExplicitMembers.Inherited.TagBase.Tag() (for ExplicitMembers.Inherited.TagA, ExplicitMembers.Inherited.TagB, ExplicitMembers.Inherited.TagC and 2 more)</code></pre>
-<p><code>implements</code> on <code>TagBase.Tag()</code> marks the line of
-<code>ExplicitMembers.Inherited.ITag.Tag()</code> the same way, and answers for a member that
-implements by a metadata row alone, whatever its name, such as the <code>MoveNext</code> of a
-class the compiler generated or a Visual Basic member that implements under a name of its own.
-<code>implemented_by</code> on a type requires an interface and lists the types that implement
-it. Where a base type could not be read, either answer ends with a line such as <code>Not
-checked: what ExternalLib.IGauge and its base types declare; ILens could not load ExternalLib,
-Version=1.0.0.0</code>; <code>implements</code> has it only for a member a base type could bind,
-one that is public and not static, or overrides.</p>
+<p>An override that runs in the bound member's place can sit above the class that lists the
+interface, where it returns a more specific type than the member it overrides, or
+<code>dynamic</code> where the interface member returns <code>object</code>. It is then marked
+with that class, as a member of a base class without the interface is, and the member it
+overrides is not listed for that class. An interface member that is neither abstract nor virtual,
+such as a static member not marked <code>abstract</code> or <code>virtual</code>, a
+<code>sealed</code> member or a <code>private</code> member, has no implementations, as the
+runtime's interface map has none for it; a <code>protected</code> or <code>internal</code> member
+with a body is virtual and is implemented as any other.</p>
+<p><code>implements</code> answers alike. On <code>TagBase.Tag()</code> it marks the line of
+<code>ExplicitMembers.Inherited.ITag.Tag()</code> the same way, on an override above the class
+that lists the interface it marks the interface member with that class, and on the member that
+override overrides it leaves the interface member out for that class. On a class member of the
+name of an interface member that has no implementations, it leaves that interface member out. It
+answers for a member that implements by a metadata row alone, whatever its name, such as the
+<code>MoveNext</code> of a class the compiler generated or a Visual Basic member that implements
+under a name of its own. <code>implemented_by</code> on a type requires an interface and lists the
+types that implement it. Where a base type could not be read, either answer ends with a line such
+as <code>Not checked: what ExternalLib.IGauge and its base types declare; ILens could not load
+ExternalLib, Version=1.0.0.0</code>; <code>implements</code> has it for a member a base type of its
+class could bind, one that is public and not static, or overrides. It has it also where a class
+below the member's class lists an interface that could not be read, and names that interface,
+since that class may bind the member to a member of that interface. That holds for a member such
+a class can bind by name, one that is public, neither static nor a constructor, of a class that
+is not sealed, unless that class or one between overrides the member or declares a public one of
+its name and signature. Asked of <code>ExternalUser.dll</code> about
+<code>ExternalUser.BoundBelow.Housing.Read()</code>, whose class lists no interface while
+<code>ExternalUser.BoundBelow.Mount</code> below it lists <code>ExternalLib.IGauge</code>,
+<code>implements</code> ends with that line, and with the folder of <code>ExternalLib.dll</code>
+as an allow-root it answers <code>ExternalLib.IGauge.Read() (for
+ExternalUser.BoundBelow.Mount)</code>.</p>
 <p>A call through an interface names the interface's member, so <code>used_by</code>,
 <code>read_by</code>, <code>assigned_by</code> and <code>call_sites</code> on a member that
 implements one list only what names the member itself, and end with a line naming the interface
@@ -1251,12 +1374,14 @@ implements the <code>Reset</code> of two interfaces:</p>
 <pre><code>No users of ExplicitMembers.Twins.Both.Reset() [declared]
 Implementation: code can call ExplicitMembers.Twins.ILeft.Reset(), ExplicitMembers.Twins.IRight.Reset() instead; ask about those members for their uses.</code></pre>
 <p>With one interface member, the line ends <code>ask about that member for its uses.</code> It
-stands for every member that implements, an ordinary public one, an explicit implementation and
-one bound by a metadata row alike. A member that implements and overrides has both lines,
-<code>Implementation:</code> first. Where a base type of the member's class was not read, the
-answer ends with <code>Not checked: whether it implements an interface member; ILens could not
-load ExternalLib, Version=1.0.0.0</code>, or <code>more interface members</code> where some were
-found.</p>
+names the interface members <code>implements</code> lists, so it stands for every member that
+implements, an ordinary public one, an explicit implementation and one bound by a metadata row
+alike, and leaves out what <code>implements</code> leaves out. A member that implements and
+overrides has both lines, <code>Implementation:</code> first. Where <code>implements</code> ends
+with its <code>Not checked:</code> line, since a base type of the member's class or an interface
+that a class below the member's class lists was not read, the answer ends with <code>Not checked:
+whether it implements an interface member; ILens could not load ExternalLib,
+Version=1.0.0.0</code>, or <code>more interface members</code> where some were found.</p>
 <p><strong>Extension methods.</strong> <code>extension_methods</code> lists the extension methods
 whose receiver is the type, passed by value or by <code>ref</code>, <code>in</code> or
 <code>ref readonly</code>: every static method marked as an extension method, in a C# static
@@ -1408,6 +1533,15 @@ code, so 'used_by' cannot be answered from it; ask the build the library runs as
 extension_methods, applied_to, overridden_by, implemented_by and implements read declarations
 alone and answer here.</code> See <a href="#conv-reference-assemblies">reference
 assemblies</a>.</li>
+<li><code>instantiated_by</code>, <code>exposed_by</code> or <code>applied_to</code> on an
+assembly that names a reference or a module by anything but a file name, or whose
+<code>.deps.json</code> names a folder outside the NuGet package folders, is a link, is not valid
+JSON or cannot be read: <code>This analysis is not run on Named.dll: the reference search it runs
+on follows what the assembly names, and it names a reference ..\Outside\ExternalLib, which is not
+a file name.</code>, or for a <code>.deps.json</code> a last clause such as <code>its dependency
+manifest, Read.deps.json, names a folder outside the NuGet package folders.</code> These three
+kinds run a reference search of their own, which would look up such a name or folder without
+the checks ILens makes; every other kind answers such an assembly as usual.</li>
 <li>The type or the member does not resolve, the name finds several overloads, or a base class
 from another assembly declares the member — see <a href="#conv-member-lookup">member lookup</a>
 and <a href="#troubleshooting">Troubleshooting</a>.</li>
@@ -1703,6 +1837,15 @@ the values it returns or yields: one it cannot read adds a <code>?</code> line b
 it reads, so an incomplete list says so, while a lookup that only serves a condition counts for
 nothing. A lookup given a <code>FieldInfo</code> or <code>MethodInfo</code> prints nothing of its
 own, since the lookup that found it is listed on its own.</p>
+<p><strong>Code that breaks off.</strong> Where the code of a method breaks off inside an
+instruction, see <a href="#conv-broken-code">code that breaks off</a>, the scan keeps what the
+method names before the break, so only a dependency past the break is missing, and the list ends
+with the line that names every such method of the scanned assembly, also under
+<code>No dependencies</code>. On a copy of <code>HarmonyMod.dll</code> in which the code of
+<code>HarmonyMod.ManualPatches.Apply</code> breaks off in its last instruction, after the four
+<code>Harmony.Patch</code> calls that apply its patches, the answer lists the same lines as for the
+file itself and ends with <code>Not checked: the code of HarmonyMod.ManualPatches.Apply(Harmony)
+past where it breaks off inside an instruction</code>.</p>
 <p><code>TypedAttribute</code> and <code>StringTargeted</code> tell a target named through
 <code>typeof</code> and <code>nameof</code> from one named by a string, which breaks silently
 when the member is renamed. ILens tells them apart by whether the named member is public on the
@@ -1745,8 +1888,16 @@ here has its members listed whatever <code>include_compiler_generated</code> say
 <code>private protected</code>; <code>all</code> adds internal and private. See
 <a href="#conv-accessibility">accessibility</a>.</dd>
 <dt><code>name_contains</code> <span class="badge badge-optional">optional</span> <code>string</code></dt>
-<dd>Case-insensitive substring of the member's name. A constructor is found by its type's name,
-under which it is listed, and by <code>.ctor</code> or <code>.cctor</code>.</dd>
+<dd>Case-insensitive substring of the member's name. A text that ends in angle brackets, as ILens
+writes a generic name, also finds a generic method or nested type by the count of its own type
+parameters, whatever the brackets hold, as the name filters of
+<a href="#tool-find_types"><code>find_types</code></a> and
+<a href="#tool-find_methods"><code>find_methods</code></a> do: <code>Get&lt;&gt;</code> or
+<code>Get&lt;int&gt;</code> finds a method <code>Get&lt;T&gt;</code> or <code>TryGet&lt;T&gt;</code>,
+not <code>Get&lt;T, U&gt;</code> or <code>GetAll&lt;T&gt;</code>. A constructor is found by its
+type's name, under which it is listed, the name with brackets included, as
+<code>Cache&lt;&gt;</code> finds the constructors of <code>Cache&lt;T&gt;</code>, and by
+<code>.ctor</code> or <code>.cctor</code>.</dd>
 <dt><code>include_inherited</code> <span class="badge badge-optional">optional</span> <code>bool</code></dt>
 <dd>Include members declared on base types, stopping at <code>System.Object</code>, base classes
 another assembly defines included. Default <code>false</code>.</dd>
@@ -2100,6 +2251,10 @@ BaseShift.Sides.Banner has no setter.</code>, or <code>Event '...' on ... has no
 accessor.</code></li>
 <li>The member is declared on a base class another assembly defines: <code>... inherits ... from
 a base class this assembly does not define; ... comes from &lt;file&gt;.</code></li>
+<li>Code the decompiler cannot read, such as code that names an array type without dimensions,
+which no compiler writes but a tool that guards an assembly against decompiling can, fails with the
+decompiler's own error, passed on with its type and message: <code>Error:
+ArgumentOutOfRangeException: dimensions must be positive</code>.</li>
 <li>A reference assembly, whose method bodies are placeholders, is refused before any name is
 looked up, for a whole type and for any member alike: <code>This assembly is a reference assembly,
 which holds a library's declarations without their code, so there is no code to decompile; ask the
@@ -2223,13 +2378,18 @@ Not finished: 871 of 888 types decompiled. Repeat the call to continue; what is 
 a tenth of a second. The numbers count the top-level types of the scope. Every call finishes at
 least one type, so each repeat gets further. A second search of the same assembly while one
 decompiles waits for it within its own time limit.</p>
-<p>The text is kept for as long as the server runs and the file stays as it was; a file that
-changed is decompiled anew. The kept text has a quarter of the memory budget that
+<p>The text is kept while the server runs, for as long as the file and the libraries it references
+from inside the allowed roots stay as they were, since the decompiled code writes what it reads of
+those libraries, such as the name of an enum member where the code holds its value. After either
+changed, the file is decompiled anew. The kept text has a quarter of the memory budget that
 <code>--max-total-size</code> sets. When that share is full, the text of the assembly searched longest
 ago gives way, and a later search of that assembly decompiles it again. A scope whose text alone
 does not fit ends in an error, see Errors.</p>
-<p>A type that failed to decompile is named in a last line, <code>Not searched: N types that
-failed to decompile: ...</code>, also under an empty answer, so an answer without that line covers
+<p>A type that failed to decompile is named in a line at the end, <code>Not searched: N types that
+failed to decompile: ...</code>. Where the code of a method of the types searched breaks off inside
+an instruction, see <a href="#conv-broken-code">code that breaks off</a>, its decompiled code ends
+at the break, so a line past it is not there to match, and the answer ends with the line that
+names such methods. Both lines also stand under an empty answer, so an answer without them covers
 the whole scope.</p>
 <h4>Errors</h4>
 <ul class="tight">
@@ -2606,6 +2766,12 @@ reference assembly, which holds no code to compare with B's.</code> and B's code
 <code>— A and B are reference assemblies, which hold no code to compare.</code>; a member only such
 a build has is shown by its declaration and the line <code>// B is a reference assembly, which
 holds no code.</code></p>
+<p><strong>Code that breaks off.</strong> Where the code of a method breaks off inside an
+instruction, see <a href="#conv-broken-code">code that breaks off</a>, a change past the break
+does not show, and an answer whose comparison read such code ends with the line that names each
+such method with the builds its code breaks off in, <code>A</code>, <code>B</code> or
+<code>A and B</code>: <code>Not compared: the code of BrokenBody.Shapes.Cut() in A and B past
+where it breaks off inside an instruction</code>.</p>
 <p>For a method Burst compiles, the C# shown is Burst's copy of its code, which the line that
 names the method marks with <code>(via X$BurstManaged)</code>.</p>
 <h4>Errors</h4>
@@ -2694,6 +2860,11 @@ only.</p>
 <p>ILens holds an assembly's whole image in memory while it is open, so a file larger than the
 whole memory budget is refused before it is loaded. Raise the budget with
 <code>--max-total-size &lt;MB&gt;</code>.</p>
+
+<h4><code>IOException: The process cannot access the file '...' because it is being used by another process.</code></h4>
+<p>Another program, such as a build that writes it, held the <code>.deps.json</code> beside the
+assembly open while ILens read it. The call fails rather than answer without the packages that
+file names; ask again once the program lets go of it, and the next call reads the file anew.</p>
 
 <h4><code>Unknown argument '...' for tool '...'. Valid arguments: ...</code></h4>
 <p>An argument name the tool does not declare, often a parameter name from an older ILens
@@ -2890,6 +3061,12 @@ argument.</li>
 <code>[ILens] --max-search-seconds must be a non-negative integer (seconds): ...</code>, and a
 line that names the value a flag is missing.</li>
 </ul>
+<p>Where Smart App Control is on, Windows can refuse to start <code>ILens.exe</code>, which is not
+signed, and the MCP client reports that as a server that failed to start or to connect.
+<code>ilens --version</code> in a terminal then reports the block: Windows PowerShell says "An
+Application Control policy has blocked this file", and Command Prompt reports a block by "your
+organization's Device Guard policy", also on a PC no organization manages. See the Smart App
+Control entry in <a href="#appendix-install-troubleshooting">Appendix C</a>.</p>
 
 <h2 id="appendix-alt-install">Appendix A: Alternative installers</h2>
 
@@ -2917,8 +3094,12 @@ anywhere. Then either add the directory to PATH yourself, or give the binary's f
 
 <p><strong>PowerShell one-liner.</strong> Re-run
 <code>irm https://raw.githubusercontent.com/tadis174/ILens/main/install.ps1 | iex</code> to
-update — the script overwrites the install directory in place and stops any running ILens
-processes first. Uninstall with
+update — the script extracts the new version into a folder beside the install,
+<code>%LOCALAPPDATA%\Programs\ILens.new\</code>, runs it with <code>--version</code> to check
+that it starts, and only then stops any running ILens processes and replaces the install
+directory. A new version that does not start, or that antivirus software removes, leaves the
+installed version as it was, and the script says so: <code>The installation stopped, and ... is as
+it was before.</code> Uninstall with
 <code>irm https://raw.githubusercontent.com/tadis174/ILens/main/uninstall.ps1 | iex</code>.</p>
 
 <p><strong>Manual ZIP.</strong> No automatic update mechanism — re-download
@@ -2932,18 +3113,52 @@ extracted folder and remove the PATH entry if you added one.</p>
 quarantine and restore the file, or add an exception for the install directory —
 <code>%LOCALAPPDATA%\Microsoft\WinGet\Packages\Tadis.ILens_*\</code> for winget,
 <code>%LOCALAPPDATA%\Programs\ILens\</code> for the PowerShell script — before re-running the
-installer.</p>
+installer. For the PowerShell script, add one for
+<code>%LOCALAPPDATA%\Programs\ILens.new\</code> as well, where the script extracts and checks a
+new version.</p>
 
 <h4>SmartScreen shows "Windows protected your PC"</h4>
 <p>This affects browser-downloaded ZIP installs, which carry Mark-of-the-Web. The winget and
-PowerShell paths do not. For a manual browser download, click "More info → Run anyway".</p>
+PowerShell paths do not. For a manual browser download, click "More info → Run anyway". Smart App
+Control is a separate check, which can block every path; see the next entry.</p>
+
+<h4>Windows refuses to start ILens (Smart App Control)</h4>
+<p>The MCP client reports that the ILens server failed to start or to connect, and
+<code>ilens --version</code> in a terminal reports a block: Windows PowerShell says "An
+Application Control policy has blocked this file", and Command Prompt reports a block by "your
+organization's Device Guard policy", also on a PC no organization manages.
+<code>install.ps1</code> stops with a message that begins <code>Windows refused to start the new
+ILens.exe:</code> and names Smart App Control. An upgrade through <code>install.ps1</code> that
+Windows blocks leaves the installed version in place, so a version that ran before keeps
+running.</p>
+<p>The cause is Smart App Control of Windows 11. It lets a program run when Microsoft's cloud
+service predicts that it is safe or when it carries a trusted signature, and blocks it otherwise.
+<code>ILens.exe</code> is not signed, so the block can meet every install path, winget,
+<code>install.ps1</code> and the ZIP alike. Windows Security shows whether Smart App Control is on,
+under "App &amp; browser control → Smart App Control settings", and Event Viewer lists each block
+under "Applications and Services Logs → Microsoft → Windows → CodeIntegrity → Operational" as
+event 3077 naming <code>ILens.exe</code>. Smart App Control has no exception for a single program,
+so neither "Run anyway" nor the file's properties allow ILens. The options, none recommended over
+another:</p>
+<ul class="tight">
+<li>Use ILens on a PC or virtual machine where Smart App Control is off or only evaluates.</li>
+<li>On a PC an organization manages, an App Control policy of the organization blocks the file,
+and its administrator can allow it.</li>
+<li>Turning Smart App Control off in the settings above lowers the protection for every program,
+not only for ILens, so that decision is yours; on an up-to-date Windows 11 the same settings turn
+it on again.</li>
+</ul>
+<p>If you meet the block, please report it as an issue at
+<a href="https://github.com/tadis174/ILens/issues">github.com/tadis174/ILens/issues</a>, so that
+the project learns how many users run into it.</p>
 
 <h4><code>winget upgrade Tadis.ILens</code> fails with <code>remove: Access is denied: "...\ILens.exe"</code></h4>
 <p>A running ILens MCP server — a Claude Code session, Claude Desktop, or another AI client that
 registered ILens — holds an exclusive lock on the binary winget is trying to replace. Close every
 AI client with ILens registered and re-run the upgrade. The PowerShell <code>install.ps1</code>
-path handles this automatically by stopping running ILens processes before extraction, so the
-same upgrade via <code>irm ... | iex</code> needs no manual cleanup. winget's
+path handles this itself: once the new version has started, it stops running ILens processes
+right before it replaces the files, so the same upgrade via <code>irm ... | iex</code> needs no
+manual cleanup. winget's
 <code>portable</code> installer type has no pre-install hook where an equivalent step could
 run.</p>
 
@@ -2982,7 +3197,7 @@ instructions.</p>
 
 <h2 id="colophon">Version, source, license</h2>
 
-<p>This guide documents <strong>ILens 12</strong>. Source and issue tracker:
+<p>This guide documents <strong>ILens 13</strong>. Source and issue tracker:
 <a href="https://github.com/tadis174/ILens">github.com/tadis174/ILens</a>.</p>
 
 <p>ILens is released under the MIT License; the full text ships as <code>LICENSE</code> beside

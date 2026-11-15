@@ -24,7 +24,9 @@ public static class TypeMatcher
     /// arity matches any arguments of that count — <c>List&lt;&gt;</c> or <c>List`1</c>; and
     /// an argument list compares each argument as a pattern of its own —
     /// <c>List&lt;int&gt;</c> matches only <c>List&lt;int&gt;</c>, which lets a type copied
-    /// from ILens's own output match what it came from.
+    /// from ILens's own output match what it came from. A type whose own name holds the brackets,
+    /// as C++/CLI names the class of a template instance, matches the pattern that bears its
+    /// name as it stands, spacing included, beside what the brackets read as type arguments match.
     /// An array is matched by the brackets that end the pattern, read as C# writes them, the
     /// outermost array's first and a comma for each dimension past the first: <c>int[,]</c>
     /// matches a two-dimensional array and <c>int[][,]</c> an array of them, and <c>[]</c> an
@@ -110,6 +112,11 @@ public static class TypeMatcher
 
         var parsed = ParsedTypeName.Parse(pattern);
         if (parsed == null) return false;
+
+        // A name a type bears as it stands is that name, as in SymbolResolver's lookup: a class
+        // C++/CLI names after a template instance bears its brackets, gcroot<System::String ^>.
+        if (target is not ParameterizedType && parsed.WrittenName is { } written && NameMatches(target, written))
+            return true;
 
         if (!parsed.HasArity)
         {

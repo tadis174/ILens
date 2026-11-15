@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using ModelContextProtocol.Client;
 
 namespace Tests;
@@ -120,6 +122,38 @@ public sealed class ILensServerFixture : IAsyncLifetime
             catch (UnauthorizedAccessException) { await Task.Delay(100); }
         }
     }
+
+    /// <summary>
+    /// The lines a server wrote to its error output on reading a reference and on loading and
+    /// closing an assembly, up to <paramref name="until"/>, each as its verb, the file's name and a
+    /// closing's reason, once <paramref name="until"/> is among them, or as they stand after ten
+    /// seconds. The log arrives apart from the answers, so a call on another file after each step
+    /// marks where the step's lines end. The server names a file by its path with every link
+    /// resolved, which differs from the path a test passed where the temporary folder lies behind
+    /// a link, so a line keeps the file's name alone.
+    /// </summary>
+    public static async Task<string[]> HostLines(ConcurrentQueue<string> log, string until)
+    {
+        string[] lines = [];
+        for (int attempt = 0; attempt < 200; attempt++)
+        {
+            if (attempt > 0)
+                await Task.Delay(50);
+            lines = log
+                .Select(line => HostLine.Match(line))
+                .Where(match => match.Success)
+                .Select(match => $"{match.Groups[1].Value} {Path.GetFileName(match.Groups[2].Value)}{match.Groups[3].Value}")
+                .ToArray();
+            if (Array.IndexOf(lines, until) is var end and >= 0)
+                return lines[..(end + 1)];
+        }
+        return lines;
+    }
+
+    // "[ILens] loaded <path> (<n> bytes)", "[ILens] read reference <path> (<n> bytes)" or
+    // "[ILens] closed <path> (<reason>)".
+    private static readonly Regex HostLine =
+        new(@"^\[ILens\] (loaded|read reference|closed) (.+?)(?: \(\d+ bytes\))?( \([^()]*\))?$");
 
     /// <summary>Walks up from the test output directory to the directory holding ILens.sln.</summary>
     private static string FindRepoRoot()

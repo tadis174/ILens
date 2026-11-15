@@ -118,24 +118,52 @@ public sealed class PathGuard
     /// allowed root must resolve inside one, as a requested path must, so a link planted in a root
     /// cannot point the decompiler at a file outside every root. A file outside every root is one
     /// the resolver found among the installed .NET libraries, in the Global Assembly Cache, among
-    /// the Windows metadata files or in a NuGet package folder a .deps.json names, which is not
-    /// this class's concern.
+    /// the Windows metadata files or in a package folder under a NuGet package root that the
+    /// assembly's dependency manifest names, since the search is given only names
+    /// <see cref="AdmitsReferenceName"/> admits and only the folders <see cref="DependencyManifest"/>
+    /// keeps; it is admitted as it is.
     /// </summary>
     public bool AdmitsReference(string path)
     {
-        var normalized = Path.GetFullPath(path);
-        if (!_roots.Any(r => r.Covers(normalized)))
+        if (!Covers(path))
             return true;
 
         try
         {
-            return ResolvesIntoARoot(ResolveReparsePoints(normalized, leafIsDirectory: false));
+            return ResolvesIntoARoot(ResolveReparsePoints(Path.GetFullPath(path), leafIsDirectory: false));
         }
         catch (ArgumentException)
         {
             return false;
         }
     }
+
+    /// <summary>
+    /// Whether <paramref name="path"/> lies under an allowed root, in either spelling of the root,
+    /// as the path is written, before its links are resolved. Of the files the reference search
+    /// finds, these are the ones a project's build can replace; the others lie where
+    /// <see cref="AdmitsReference"/> says.
+    /// </summary>
+    public bool Covers(string path)
+    {
+        var normalized = Path.GetFullPath(path);
+        return _roots.Any(r => r.Covers(normalized));
+    }
+
+    /// <summary>
+    /// Whether the decompiler may look for a reference or a module by <paramref name="name"/>:
+    /// only by a plain file name, one that is not empty, not <c>.</c> or <c>..</c>, and holds no
+    /// character Windows forbids in a file name, which covers both slashes and the colon. The
+    /// reference search joins the name with each folder it searches and asks whether the file
+    /// exists before anything checks the path, so a name that is a path would lead it to that
+    /// path: outside every root, or onto a share on another computer, which Windows then connects
+    /// to.
+    /// </summary>
+    public static bool AdmitsReferenceName(string name) =>
+        !string.IsNullOrEmpty(name) && name is not "." and not ".."
+        && name.IndexOfAny(InvalidFileNameCharacters) < 0;
+
+    private static readonly char[] InvalidFileNameCharacters = Path.GetInvalidFileNameChars();
 
     /// <summary>
     /// Whether a path with its links resolved lies under the resolved spelling of a root. The

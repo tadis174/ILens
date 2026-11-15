@@ -7,7 +7,8 @@ namespace Tests;
 /// End-to-end tests for <c>analyze</c> with <c>implements</c>, which names the interface members
 /// a method, property, event or accessor implements. The ExternalUser fixture's Dial implements
 /// ExternalLib's IGauge and its own ILocalGauge implicitly, and its SealedDial implements IGauge
-/// explicitly. ExternalLib.dll lands only in the References folder of the test output, so the
+/// explicitly. Its Mount binds IGauge's members to those it inherits from Housing, which lists
+/// no interface. ExternalLib.dll lands only in the References folder of the test output, so the
 /// shared server cannot load IGauge, while the second server, which has that folder as an
 /// allow-root, can. The ExplicitMembers fixture's Sources.cs holds one class for each way a
 /// member can have the name and parameters of an interface member without implementing it.
@@ -94,6 +95,105 @@ public sealed class ImplementsTests
         Assert.Equal($"No interface members implemented by ExternalUser.Dial.Tap() [declared]\n{GaugeNotChecked}", publicMember);
         Assert.Equal("No interface members implemented by ExternalUser.Dial.Tick() [declared]", privateMember);
         Assert.Equal("No interface members implemented by ExternalUser.Dial.Zero() [declared]", staticMember);
+    }
+
+    // A member of BoundBelow's Housing, as analyze names it, and the member of IGauge that
+    // Mount, a class below Housing, binds to it by name.
+    public static TheoryData<string, string, string> BoundBelowMembers => new()
+    {
+        { "Read", "ExternalUser.BoundBelow.Housing.Read()", "ExternalLib.IGauge.Read()" },
+        { "Unit", "ExternalUser.BoundBelow.Housing.Unit", "ExternalLib.IGauge.Unit" },
+        { "get_Unit", "ExternalUser.BoundBelow.Housing.get_Unit()", "ExternalLib.IGauge.get_Unit()" },
+        { "Moved", "ExternalUser.BoundBelow.Housing.Moved", "ExternalLib.IGauge.Moved" },
+    };
+
+    [Theory]
+    [MemberData(nameof(BoundBelowMembers))]
+    public async Task Implements_OnAMemberAClassBelowBindsToAnInterfaceThatWasNotRead_SaysWhatWasNotRead(
+        string memberName, string subject, string implemented)
+    {
+        // Housing lists no interface, and Mount, below it, lists IGauge. Where IGauge's assembly
+        // does not load, nothing shows that Mount binds the member, so an empty answer alone
+        // would read as proof that it implements nothing.
+        string loaded = await Implements(_references.Client, _userPath, "ExternalUser.BoundBelow.Housing", memberName);
+        string notLoaded = await Implements(_shared.Client, _userPath, "ExternalUser.BoundBelow.Housing", memberName);
+
+        Assert.Equal(
+            $"1 interface member implemented by {subject} [declared]:\n{implemented} (for ExternalUser.BoundBelow.Mount)",
+            loaded);
+        Assert.Equal($"No interface members implemented by {subject} [declared]\n{GaugeNotChecked}", notLoaded);
+    }
+
+    [Fact]
+    public async Task Implements_WithOneInterfaceOfAClassBelowReadAndOneNot_ListsWhatItFoundAndSaysWhatWasNotRead()
+    {
+        // Mount binds ILocalGauge.Reset, which the assembly defines, to Housing.Reset. IGauge,
+        // which Mount lists as well, might declare a Reset too.
+        const string found =
+            "1 interface member implemented by ExternalUser.BoundBelow.Housing.Reset() [declared]:\n" +
+            "ExternalUser.ILocalGauge.Reset() (for ExternalUser.BoundBelow.Mount)";
+
+        string loaded = await Implements(_references.Client, _userPath, "ExternalUser.BoundBelow.Housing", "Reset");
+        string notLoaded = await Implements(_shared.Client, _userPath, "ExternalUser.BoundBelow.Housing", "Reset");
+
+        Assert.Equal(found, loaded);
+        Assert.Equal(found + "\n" + GaugeNotChecked, notLoaded);
+    }
+
+    [Fact]
+    public async Task Implements_OnAMemberAClassBelowBindsThatListsNoInterfaceThatWasRead_SaysWhatWasNotRead()
+    {
+        // Plug lists IGauge alone, so where IGauge's assembly does not load, Plug lists no
+        // interface ILens could read, and the line still names IGauge.
+        string loaded = await Implements(_references.Client, _userPath, "ExternalUser.BoundBelow.Socket", "Read");
+        string notLoaded = await Implements(_shared.Client, _userPath, "ExternalUser.BoundBelow.Socket", "Read");
+
+        Assert.Equal(
+            "1 interface member implemented by ExternalUser.BoundBelow.Socket.Read() [declared]:\n" +
+            "ExternalLib.IGauge.Read() (for ExternalUser.BoundBelow.Plug)",
+            loaded);
+        Assert.Equal(
+            $"No interface members implemented by ExternalUser.BoundBelow.Socket.Read() [declared]\n{GaugeNotChecked}",
+            notLoaded);
+    }
+
+    // A member of Chassis or Shell, as analyze names it, and the member of IGauge that Hood binds
+    // to it where IGauge loads, or null for none.
+    [Theory]
+    [InlineData("Chassis", "Read", "ExternalUser.BoundBelow.Chassis.Read()", null)]
+    [InlineData("Chassis", "Unit", "ExternalUser.BoundBelow.Chassis.Unit", null)]
+    [InlineData("Chassis", "Moved", "ExternalUser.BoundBelow.Chassis.Moved", "ExternalLib.IGauge.Moved")]
+    [InlineData("Shell", "Read", "ExternalUser.BoundBelow.Shell.Read()", "ExternalLib.IGauge.Read()")]
+    public async Task Implements_OnAMemberAClassBetweenOverridesOrHides_LeavesTheClassBelowOutOfTheLine(
+        string typeName, string memberName, string subject, string? implemented)
+    {
+        // Shell overrides Chassis's Read and hides its Unit, so Hood binds IGauge's members of
+        // those names to Shell's whatever IGauge declares, and only Chassis's Moved and Shell's
+        // Read are left open where IGauge does not load.
+        string loaded = await Implements(_references.Client, _userPath, $"ExternalUser.BoundBelow.{typeName}", memberName);
+        string notLoaded = await Implements(_shared.Client, _userPath, $"ExternalUser.BoundBelow.{typeName}", memberName);
+
+        string empty = $"No interface members implemented by {subject} [declared]";
+        Assert.Equal(
+            implemented is null
+                ? empty
+                : $"1 interface member implemented by {subject} [declared]:\n{implemented} (for ExternalUser.BoundBelow.Hood)",
+            loaded);
+        Assert.Equal(implemented is null ? empty : $"{empty}\n{GaugeNotChecked}", notLoaded);
+    }
+
+    [Theory]
+    [InlineData("Tick", "ExternalUser.BoundBelow.Housing.Tick()")]
+    [InlineData("Zero", "ExternalUser.BoundBelow.Housing.Zero()")]
+    [InlineData("Housing", "ExternalUser.BoundBelow.Housing..ctor()")]
+    public async Task Implements_OnAMemberNoClassBelowCanBindByName_SaysNothingWasLeftUnchecked(
+        string memberName, string subject)
+    {
+        // A class below binds by name only to a public member that is not static, and a
+        // constructor implements nothing, so what IGauge declares does not matter to these.
+        Assert.Equal(
+            $"No interface members implemented by {subject} [declared]",
+            await Implements(_shared.Client, _userPath, "ExternalUser.BoundBelow.Housing", memberName));
     }
 
     [Fact]
